@@ -1,4 +1,4 @@
-import { Incident, KubernetesResource } from '../../src/types/index';
+import { Incident, IntelligenceAnalysis, KubernetesResource } from '../../src/types/index';
 import { IncidentContext } from './types';
 
 // Normal operational keys that should NEVER be redacted by key-name matches
@@ -198,7 +198,8 @@ export function sanitizeObject(obj: any, depth = 0): any {
 export function buildIncidentContext(
   incident: Incident,
   associatedResource?: KubernetesResource | null,
-  additionalNotes?: string[]
+  additionalNotes?: string[],
+  intelligence?: IntelligenceAnalysis
 ): IncidentContext {
   const tech = incident.technicalDetails || {};
 
@@ -317,6 +318,7 @@ export function buildIncidentContext(
     relatedResources,
     specSummary,
     statusSummary,
-    additionalNotes: additionalNotes && additionalNotes.length > 0 ? additionalNotes.slice(0, 5) : undefined
+    additionalNotes: additionalNotes && additionalNotes.length > 0 ? additionalNotes.slice(0, 5) : undefined,
+    intelligence
   };
 }

@@ -93,6 +93,11 @@ export function generateKubernetesManifest(config: ManifestConfig): string {
           resources: ['ingresses'],
           verbs: ['get', 'list', 'watch'],
         },
+        {
+          apiGroups: ['metrics.k8s.io'],
+          resources: ['nodes', 'pods'],
+          verbs: ['get', 'list'],
+        },
       ],
     },
     {

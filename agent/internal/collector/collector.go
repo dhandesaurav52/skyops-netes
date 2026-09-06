@@ -18,10 +18,12 @@ type ResourceObservation struct {
 	Kind          string                 `json:"kind"`
 	Namespace     string                 `json:"namespace"`
 	Name          string                 `json:"name"`
+	NodeName      string                 `json:"nodeName,omitempty"`
 	Status        string                 `json:"status"`
 	Health        string                 `json:"health"`
 	CreatedAt     int64                  `json:"createdAt"`
 	UpdatedAt     int64                  `json:"updatedAt"`
+	ObservedAt    int64                  `json:"observedAt,omitempty"`
 	SpecSummary   map[string]interface{} `json:"specSummary"`
 	StatusSummary map[string]interface{} `json:"statusSummary"`
 	Containers    []ContainerStatus      `json:"containers,omitempty"`
@@ -42,6 +44,11 @@ type ContainerStatus struct {
 	LastTerminationReason string `json:"lastTerminationReason,omitempty"`
 	LastExitCode          int    `json:"lastExitCode,omitempty"`
 	MemoryLimit           string `json:"memoryLimit,omitempty"`
+	MemoryRequest         string `json:"memoryRequest,omitempty"`
+	CpuLimit              string `json:"cpuLimit,omitempty"`
+	CpuRequest            string `json:"cpuRequest,omitempty"`
+	MemoryUsage           string `json:"memoryUsage,omitempty"`
+	CpuUsage              string `json:"cpuUsage,omitempty"`
 }
 
 type ConditionStatus struct {
@@ -138,14 +145,38 @@ func (c *Collector) collectFromKubernetes(ctx context.Context) {
 	// 1. Fetch Events first to correlate with pods, nodes, and workloads
 	eventsMap, totalEvents := c.collectEvents(ctx)
 
+	// Fetch real metrics from Metrics Server (/apis/metrics.k8s.io/v1beta1) if available
+	nodeMetricsMap := make(map[string]*K8sNodeMetrics)
+	if nodeMetricsList, err := c.k8sClient.GetNodeMetrics(ctx); err == nil && nodeMetricsList != nil {
+		for i := range nodeMetricsList.Items {
+			item := &nodeMetricsList.Items[i]
+			nodeMetricsMap[item.Metadata.Name] = item
+		}
+		slog.Debug("Real node metrics collected from Metrics Server", "nodesWithMetrics", len(nodeMetricsMap))
+	} else {
+		slog.Debug("Kubernetes Metrics Server node metrics not available", "notice", err)
+	}
+
+	podMetricsMap := make(map[string]*K8sPodMetrics)
+	if podMetricsList, err := c.k8sClient.GetPodMetrics(ctx); err == nil && podMetricsList != nil {
+		for i := range podMetricsList.Items {
+			item := &podMetricsList.Items[i]
+			key := fmt.Sprintf("%s/%s", item.Metadata.Namespace, item.Metadata.Name)
+			podMetricsMap[key] = item
+		}
+		slog.Debug("Real pod metrics collected from Metrics Server", "podsWithMetrics", len(podMetricsMap))
+	} else {
+		slog.Debug("Kubernetes Metrics Server pod metrics not available", "notice", err)
+	}
+
 	// 2. Fetch Nodes
-	nodeObservations, detectedK8sVer := c.collectNodes(ctx, eventsMap)
+	nodeObservations, detectedK8sVer := c.collectNodes(ctx, eventsMap, nodeMetricsMap)
 	for _, obs := range nodeObservations {
 		c.RecordObservation(obs)
 	}
 
 	// 3. Fetch Pods
-	podObservations := c.collectPods(ctx, eventsMap)
+	podObservations := c.collectPods(ctx, eventsMap, podMetricsMap)
 	for _, obs := range podObservations {
 		c.RecordObservation(obs)
 	}
@@ -230,7 +261,7 @@ func (c *Collector) collectEvents(ctx context.Context) (map[string][]EventObserv
 	return eventsMap, len(eventList.Items)
 }
 
-func (c *Collector) collectNodes(ctx context.Context, eventsMap map[string][]EventObservation) ([]ResourceObservation, string) {
+func (c *Collector) collectNodes(ctx context.Context, eventsMap map[string][]EventObservation, nodeMetricsMap map[string]*K8sNodeMetrics) ([]ResourceObservation, string) {
 	var results []ResourceObservation
 	var detectedK8sVer string
 
@@ -276,6 +307,24 @@ func (c *Collector) collectNodes(ctx context.Context, eventsMap map[string][]Eve
 
 		nodeEvents := eventsMap[fmt.Sprintf("Node//%s", node.Metadata.Name)]
 
+		statusSummary := map[string]interface{}{
+			"kubeletVersion": node.Status.NodeInfo.KubeletVersion,
+			"osImage":        node.Status.NodeInfo.OSImage,
+			"architecture":   node.Status.NodeInfo.Architecture,
+			"capacity":       node.Status.Capacity,
+			"allocatable":    node.Status.Allocatable,
+		}
+
+		nodeMetric := nodeMetricsMap[node.Metadata.Name]
+		if nodeMetric != nil {
+			statusSummary["metricsAvailable"] = true
+			statusSummary["metricsObservedAt"] = nodeMetric.Timestamp
+			statusSummary["metricsWindow"] = nodeMetric.Window
+			statusSummary["usage"] = nodeMetric.Usage
+		} else {
+			statusSummary["metricsAvailable"] = false
+		}
+
 		results = append(results, ResourceObservation{
 			ID:        node.Metadata.UID,
 			Kind:      "Node",
@@ -285,18 +334,13 @@ func (c *Collector) collectNodes(ctx context.Context, eventsMap map[string][]Eve
 			Health:    health,
 			CreatedAt: createdTs,
 			UpdatedAt: time.Now().UnixMilli(),
+			ObservedAt: time.Now().UnixMilli(),
 			SpecSummary: map[string]interface{}{
 				"podCIDR": node.Spec.PodCIDR,
 			},
-			StatusSummary: map[string]interface{}{
-				"kubeletVersion": node.Status.NodeInfo.KubeletVersion,
-				"osImage":        node.Status.NodeInfo.OSImage,
-				"architecture":   node.Status.NodeInfo.Architecture,
-				"capacity":       node.Status.Capacity,
-				"allocatable":    node.Status.Allocatable,
-			},
-			Conditions: conditions,
-			Events:     nodeEvents,
+			StatusSummary: statusSummary,
+			Conditions:    conditions,
+			Events:        nodeEvents,
 		})
 	}
 
@@ -309,7 +353,7 @@ func (c *Collector) collectNodes(ctx context.Context, eventsMap map[string][]Eve
 	return results, detectedK8sVer
 }
 
-func (c *Collector) collectPods(ctx context.Context, eventsMap map[string][]EventObservation) []ResourceObservation {
+func (c *Collector) collectPods(ctx context.Context, eventsMap map[string][]EventObservation, podMetricsMap map[string]*K8sPodMetrics) []ResourceObservation {
 	var results []ResourceObservation
 
 	var podList K8sPodList
@@ -336,20 +380,51 @@ func (c *Collector) collectPods(ctx context.Context, eventsMap map[string][]Even
 		hasImagePull := false
 		allReady := true
 
+		podMetricKey := fmt.Sprintf("%s/%s", pod.Metadata.Namespace, pod.Metadata.Name)
+		podMetric := podMetricsMap[podMetricKey]
+
 		for _, cs := range pod.Status.ContainerStatuses {
 			memoryLimit := ""
+			memoryRequest := ""
+			cpuLimit := ""
+			cpuRequest := ""
 			for _, specContainer := range pod.Spec.Containers {
 				if specContainer.Name == cs.Name {
-					memoryLimit = specContainer.Resources.Limits["memory"]
+					if specContainer.Resources.Limits != nil {
+						memoryLimit = specContainer.Resources.Limits["memory"]
+						cpuLimit = specContainer.Resources.Limits["cpu"]
+					}
+					if specContainer.Resources.Requests != nil {
+						memoryRequest = specContainer.Resources.Requests["memory"]
+						cpuRequest = specContainer.Resources.Requests["cpu"]
+					}
 					break
 				}
 			}
+
+			cpuUsage := ""
+			memoryUsage := ""
+			if podMetric != nil {
+				for _, cm := range podMetric.Containers {
+					if cm.Name == cs.Name {
+						cpuUsage = cm.Usage["cpu"]
+						memoryUsage = cm.Usage["memory"]
+						break
+					}
+				}
+			}
+
 			cStat := ContainerStatus{
-				Name:         cs.Name,
-				Image:        cs.Image,
-				RestartCount: cs.RestartCount,
-				Ready:        cs.Ready,
-				MemoryLimit:  memoryLimit,
+				Name:          cs.Name,
+				Image:         cs.Image,
+				RestartCount:  cs.RestartCount,
+				Ready:         cs.Ready,
+				MemoryLimit:   memoryLimit,
+				MemoryRequest: memoryRequest,
+				CpuLimit:      cpuLimit,
+				CpuRequest:    cpuRequest,
+				MemoryUsage:   memoryUsage,
+				CpuUsage:      cpuUsage,
 			}
 
 			if !cs.Ready {
@@ -397,26 +472,37 @@ func (c *Collector) collectPods(ctx context.Context, eventsMap map[string][]Even
 
 		podEvents := eventsMap[fmt.Sprintf("Pod/%s/%s", pod.Metadata.Namespace, pod.Metadata.Name)]
 
+		statusSummary := map[string]interface{}{
+			"podIP":  pod.Status.PodIP,
+			"hostIP": pod.Status.HostIP,
+			"phase":  pod.Status.Phase,
+		}
+		if podMetric != nil {
+			statusSummary["metricsAvailable"] = true
+			statusSummary["metricsObservedAt"] = podMetric.Timestamp
+			statusSummary["metricsWindow"] = podMetric.Window
+		} else {
+			statusSummary["metricsAvailable"] = false
+		}
+
 		results = append(results, ResourceObservation{
 			ID:        pod.Metadata.UID,
 			Kind:      "Pod",
 			Namespace: pod.Metadata.Namespace,
 			Name:      pod.Metadata.Name,
+			NodeName:  pod.Spec.NodeName,
 			Status:    pod.Status.Phase,
 			Health:    health,
 			CreatedAt: createdTs,
 			UpdatedAt: time.Now().UnixMilli(),
+			ObservedAt: time.Now().UnixMilli(),
 			SpecSummary: map[string]interface{}{
 				"nodeName": pod.Spec.NodeName,
 			},
-			StatusSummary: map[string]interface{}{
-				"podIP":  pod.Status.PodIP,
-				"hostIP": pod.Status.HostIP,
-				"phase":  pod.Status.Phase,
-			},
-			Containers: containers,
-			Conditions: conditions,
-			Events:     podEvents,
+			StatusSummary: statusSummary,
+			Containers:    containers,
+			Conditions:    conditions,
+			Events:        podEvents,
 		})
 	}
 

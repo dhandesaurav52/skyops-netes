@@ -34,6 +34,7 @@ import {
   IncidentNote,
   IncidentSeverity,
   IncidentStatus,
+  IntelligenceAnalysis,
   SkyOpsAIAnalysis,
   StructuredRemediation,
   TimelineEvent
@@ -44,6 +45,7 @@ import { Button, CopyButton, EmptyState, LoadingState } from '../common/UI';
 import { SkyOpsAIAnalysisCard } from './SkyOpsAIAnalysisCard';
 import { IncidentRemediationCard } from './IncidentRemediationCard';
 import { IncidentEvidenceSection } from './IncidentEvidenceSection';
+import { SkyOpsIntelligenceCard } from './SkyOpsIntelligenceCard';
 
 interface IncidentDetailViewProps {
   incidentId: string;
@@ -62,6 +64,7 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
   const [notes, setNotes] = useState<IncidentNote[]>([]);
   const [aiAnalysis, setAiAnalysis] = useState<SkyOpsAIAnalysis | null>(null);
   const [remediation, setRemediation] = useState<StructuredRemediation | null>(null);
+  const [intelligence, setIntelligence] = useState<IntelligenceAnalysis | null>(null);
   const [loading, setLoading] = useState(true);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [isSubmittingNote, setIsSubmittingNote] = useState(false);
@@ -83,6 +86,13 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
       }
       if (data.remediation) {
         setRemediation(data.remediation);
+      }
+      if (data.intelligence) {
+        setIntelligence(data.intelligence);
+      } else if (data.incident?.intelligence) {
+        setIntelligence(data.incident.intelligence);
+      } else if (data.aiAnalysis?.intelligence) {
+        setIntelligence(data.aiAnalysis.intelligence);
       }
     } catch (err) {
       console.error('Failed to fetch incident details:', err);
@@ -723,6 +733,14 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
           />
 
           {/* ========================================================================= */}
+          {/* 6.5. DETERMINISTIC INTELLIGENCE ENGINE (Authoritative Kubernetes Grounding) */}
+          {/* ========================================================================= */}
+          <SkyOpsIntelligenceCard
+            intelligence={intelligence}
+            onRefresh={fetchIncidentData}
+          />
+
+          {/* ========================================================================= */}
           {/* 7. AI ANALYSIS / DEEPER REASONING */}
           {/* ========================================================================= */}
           <SkyOpsAIAnalysisCard
@@ -734,6 +752,7 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
             onAnalysisUpdated={(analysis, rem) => {
               setAiAnalysis(analysis);
               if (rem) setRemediation(rem);
+              if (analysis.intelligence) setIntelligence(analysis.intelligence);
             }}
           />
 

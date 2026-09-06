@@ -6,6 +6,7 @@ import {
   IncidentNote,
   IncidentSeverity,
   IncidentStatus,
+  IntelligenceAnalysis,
   KubernetesResource,
   Organization,
   OrgMember,
@@ -14,7 +15,11 @@ import {
   SkyOpsAIAnalysis,
   StructuredRemediation,
   TimelineEvent,
-  User
+  User,
+  ClusterObservabilityMetrics,
+  MetricHistoryPoint,
+  NodeMetricsSummary,
+  WorkloadMetricsSummary
 } from '../types/index';
 
 class ApiClient {
@@ -181,6 +186,46 @@ class ApiClient {
     return data.resources;
   }
 
+  async getAllResources(filters?: {
+    clusterId?: string;
+    kind?: string;
+    namespace?: string;
+    health?: string;
+    search?: string;
+  }): Promise<KubernetesResource[]> {
+    const params = new URLSearchParams();
+    if (filters?.clusterId) params.set('clusterId', filters.clusterId);
+    if (filters?.kind) params.set('kind', filters.kind);
+    if (filters?.namespace) params.set('namespace', filters.namespace);
+    if (filters?.health) params.set('health', filters.health);
+    if (filters?.search) params.set('search', filters.search);
+
+    const url = `/api/v1/resources${params.toString() ? `?${params.toString()}` : ''}`;
+    const data = await this.request<{ resources: KubernetesResource[] }>(url);
+    return data.resources;
+  }
+
+  // --- Observability & Resource Metrics Foundation ---
+  async getClusterMetrics(clusterId: string): Promise<ClusterObservabilityMetrics> {
+    const data = await this.request<{ metrics: ClusterObservabilityMetrics }>(`/api/v1/clusters/${clusterId}/metrics`);
+    return data.metrics;
+  }
+
+  async getNodeMetrics(clusterId: string): Promise<NodeMetricsSummary[]> {
+    const data = await this.request<{ nodes: NodeMetricsSummary[] }>(`/api/v1/clusters/${clusterId}/metrics/nodes`);
+    return data.nodes;
+  }
+
+  async getWorkloadMetrics(clusterId: string): Promise<WorkloadMetricsSummary[]> {
+    const data = await this.request<{ workloads: WorkloadMetricsSummary[] }>(`/api/v1/clusters/${clusterId}/metrics/workloads`);
+    return data.workloads;
+  }
+
+  async getClusterMetricHistory(clusterId: string): Promise<MetricHistoryPoint[]> {
+    const data = await this.request<{ history: MetricHistoryPoint[] }>(`/api/v1/clusters/${clusterId}/metrics/history`);
+    return data.history;
+  }
+
   // --- Incidents ---
   async getIncidents(filters?: {
     status?: IncidentStatus;
@@ -207,6 +252,7 @@ class ApiClient {
     notes: IncidentNote[];
     aiAnalysis?: SkyOpsAIAnalysis | null;
     remediation?: StructuredRemediation | null;
+    intelligence?: IntelligenceAnalysis | null;
   }> {
     return this.request<{
       incident: Incident;
@@ -214,7 +260,12 @@ class ApiClient {
       notes: IncidentNote[];
       aiAnalysis?: SkyOpsAIAnalysis | null;
       remediation?: StructuredRemediation | null;
+      intelligence?: IntelligenceAnalysis | null;
     }>(`/api/v1/incidents/${id}`);
+  }
+
+  async getIncidentIntelligence(id: string): Promise<{ intelligence: IntelligenceAnalysis }> {
+    return this.request<{ intelligence: IntelligenceAnalysis }>(`/api/v1/incidents/${id}/intelligence`);
   }
 
   async getIncidentAIAnalysis(id: string): Promise<{ analysis: SkyOpsAIAnalysis; remediation?: StructuredRemediation }> {

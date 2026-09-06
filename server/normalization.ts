@@ -1,4 +1,5 @@
 import { ConditionDiagnostic, ContainerDiagnostic, K8sEvent, KubernetesResource } from '../src/types/index';
+import { buildPodResourceMetrics } from './metrics';
 
 type RecordValue = Record<string, unknown>;
 const FAILURE_WAITING = new Set(['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName', 'CreateContainerConfigError', 'CreateContainerError', 'CrashLoopBackOff']);
@@ -20,15 +21,28 @@ function normalizeConditions(value: unknown): ConditionDiagnostic[] {
 }
 
 function normalizeContainers(value: unknown, specContainers: unknown[] = []): ContainerDiagnostic[] {
-  const limitsByName = new Map(asList(specContainers).map(item => {
-    const container = asObject(item); const resources = asObject(container.resources); const limits = asObject(resources.limits);
-    return [asString(container.name), asString(limits.memory)];
+  const specByName = new Map(asList(specContainers).map(item => {
+    const container = asObject(item);
+    const resources = asObject(container.resources);
+    const limits = asObject(resources.limits);
+    const requests = asObject(resources.requests);
+    return [
+      asString(container.name),
+      {
+        memoryLimit: asString(limits.memory),
+        cpuLimit: asString(limits.cpu),
+        memoryRequest: asString(requests.memory),
+        cpuRequest: asString(requests.cpu)
+      }
+    ];
   }));
   return asList(value).map(item => {
     const container = asObject(item); const state = asObject(container.state); const waiting = asObject(state.waiting); const terminated = asObject(state.terminated); const lastState = asObject(container.lastState); const lastTerminated = asObject(lastState.terminated);
     const suppliedState = asString(container.state);
+    const name = asString(container.name, 'container');
+    const specRes = specByName.get(name);
     return {
-      name: asString(container.name, 'container'), image: asString(container.image), imageId: asString(container.imageID, asString(container.imageId)) || undefined,
+      name, image: asString(container.image), imageId: asString(container.imageID, asString(container.imageId)) || undefined,
       restartCount: asNumber(container.restartCount), ready: container.ready === true,
       state: suppliedState || (Object.keys(waiting).length > 0 ? 'waiting' : Object.keys(terminated).length > 0 ? 'terminated' : Object.keys(state.running).length > 0 ? 'running' : 'unknown'),
       waitingReason: asString(container.waitingReason, asString(waiting.reason)) || undefined,
@@ -38,7 +52,12 @@ function normalizeContainers(value: unknown, specContainers: unknown[] = []): Co
       signal: typeof terminated.signal === 'number' ? terminated.signal : undefined,
       lastTerminationReason: asString(container.lastTerminationReason, asString(lastTerminated.reason)) || undefined,
       lastExitCode: typeof container.lastExitCode === 'number' ? container.lastExitCode : typeof lastTerminated.exitCode === 'number' ? lastTerminated.exitCode : undefined,
-      memoryLimit: asString(container.memoryLimit) || limitsByName.get(asString(container.name)) || undefined
+      memoryLimit: asString(container.memoryLimit) || specRes?.memoryLimit || undefined,
+      memoryRequest: asString(container.memoryRequest) || specRes?.memoryRequest || undefined,
+      cpuLimit: asString(container.cpuLimit) || specRes?.cpuLimit || undefined,
+      cpuRequest: asString(container.cpuRequest) || specRes?.cpuRequest || undefined,
+      memoryUsage: asString(container.memoryUsage) || undefined,
+      cpuUsage: asString(container.cpuUsage) || undefined
     };
   });
 }
@@ -74,7 +93,42 @@ export function normalizeResource(value: unknown, authenticatedClusterId: string
   } else if (kind === 'PersistentVolumeClaim') { displayStatus = asString(status.phase, displayStatus); health = displayStatus === 'Bound' ? 'HEALTHY' : displayStatus === 'Lost' ? 'CRITICAL' : 'WARNING'; }
   const createdAt = Date.parse(asString(metadata.creationTimestamp));
   const uid = asString(metadata.uid) || asString(raw.uid) || asString(raw.id) || undefined;
-  return { id: uid || resourceIdentity(authenticatedClusterId, kind, namespace, name), uid, apiVersion: asString(raw.apiVersion) || undefined, clusterId: authenticatedClusterId, kind, namespace, name, status: displayStatus, health, createdAt: Number.isNaN(createdAt) ? asNumber(raw.createdAt, now) : createdAt, updatedAt: now, specSummary: spec, statusSummary: status, conditions, containers, events: normalizeEvents(raw.events), ownerReferences: asList(metadata.ownerReferences ?? raw.ownerReferences).map(reference => { const owner = asObject(reference); return { uid: asString(owner.uid) || undefined, kind: asString(owner.kind) || undefined, name: asString(owner.name) || undefined, controller: owner.controller === true }; }) };
+  const observedAt = asNumber(raw.observedAt, asNumber(status.metricsObservedAt, now));
+  const res: KubernetesResource = {
+    id: uid || resourceIdentity(authenticatedClusterId, kind, namespace, name),
+    uid,
+    apiVersion: asString(raw.apiVersion) || undefined,
+    clusterId: authenticatedClusterId,
+    kind,
+    namespace,
+    name,
+    status: displayStatus,
+    health,
+    createdAt: Number.isNaN(createdAt) ? asNumber(raw.createdAt, now) : createdAt,
+    updatedAt: now,
+    observedAt,
+    ingestedAt: now,
+    specSummary: spec,
+    statusSummary: status,
+    conditions,
+    containers,
+    events: normalizeEvents(raw.events),
+    ownerReferences: asList(metadata.ownerReferences ?? raw.ownerReferences).map(reference => {
+      const owner = asObject(reference);
+      return {
+        uid: asString(owner.uid) || undefined,
+        kind: asString(owner.kind) || undefined,
+        name: asString(owner.name) || undefined,
+        controller: owner.controller === true
+      };
+    })
+  };
+
+  if (kind === 'Pod') {
+    res.metrics = buildPodResourceMetrics(res, now);
+  }
+
+  return res;
 }
 
 export function normalizeTelemetry(payload: unknown, clusterId: string): KubernetesResource[] | null {

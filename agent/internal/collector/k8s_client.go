@@ -125,6 +125,51 @@ func (k *InClusterK8sClient) GetServerVersion(ctx context.Context) (string, erro
 	return "", fmt.Errorf("no version string found in /version response")
 }
 
+// K8sNodeMetricsList represents the response from /apis/metrics.k8s.io/v1beta1/nodes
+type K8sNodeMetricsList struct {
+	Items []K8sNodeMetrics `json:"items"`
+}
+
+type K8sNodeMetrics struct {
+	Metadata  K8sObjectMeta     `json:"metadata"`
+	Timestamp string            `json:"timestamp"`
+	Window    string            `json:"window"`
+	Usage     map[string]string `json:"usage"` // "cpu", "memory"
+}
+
+// K8sPodMetricsList represents the response from /apis/metrics.k8s.io/v1beta1/pods
+type K8sPodMetricsList struct {
+	Items []K8sPodMetrics `json:"items"`
+}
+
+type K8sPodMetrics struct {
+	Metadata   K8sObjectMeta `json:"metadata"`
+	Timestamp  string        `json:"timestamp"`
+	Window     string        `json:"window"`
+	Containers []struct {
+		Name  string            `json:"name"`
+		Usage map[string]string `json:"usage"`
+	} `json:"containers"`
+}
+
+// GetNodeMetrics queries the Metrics Server API /apis/metrics.k8s.io/v1beta1/nodes
+func (k *InClusterK8sClient) GetNodeMetrics(ctx context.Context) (*K8sNodeMetricsList, error) {
+	var metricsList K8sNodeMetricsList
+	if err := k.GetJSON(ctx, "/apis/metrics.k8s.io/v1beta1/nodes", &metricsList); err != nil {
+		return nil, err
+	}
+	return &metricsList, nil
+}
+
+// GetPodMetrics queries the Metrics Server API /apis/metrics.k8s.io/v1beta1/pods
+func (k *InClusterK8sClient) GetPodMetrics(ctx context.Context) (*K8sPodMetricsList, error) {
+	var metricsList K8sPodMetricsList
+	if err := k.GetJSON(ctx, "/apis/metrics.k8s.io/v1beta1/pods", &metricsList); err != nil {
+		return nil, err
+	}
+	return &metricsList, nil
+}
+
 // Low-level K8s object schemas
 type K8sListMeta struct {
 	ResourceVersion string `json:"resourceVersion"`
@@ -179,7 +224,8 @@ type K8sPod struct {
 			Name      string `json:"name"`
 			Image     string `json:"image"`
 			Resources struct {
-				Limits map[string]string `json:"limits"`
+				Requests map[string]string `json:"requests"`
+				Limits   map[string]string `json:"limits"`
 			} `json:"resources"`
 		} `json:"containers"`
 	} `json:"spec"`

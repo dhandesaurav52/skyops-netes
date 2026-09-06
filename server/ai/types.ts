@@ -15,6 +15,7 @@ import {
   Incident,
   IncidentSeverity,
   IncidentType,
+  IntelligenceAnalysis,
   KubernetesResource,
   RemediationApproval,
   RemediationExecution,
@@ -102,6 +103,7 @@ export interface IncidentContext {
   specSummary: Record<string, unknown>;
   statusSummary: Record<string, unknown>;
   additionalNotes?: string[];
+  intelligence?: IntelligenceAnalysis;
 }
 
 /**

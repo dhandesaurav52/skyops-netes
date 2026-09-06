@@ -1,4 +1,5 @@
 import { Incident, KubernetesResource, SkyOpsAIAnalysis } from '../../src/types/index';
+import { SkyOpsIntelligenceEngine } from '../engine/intelligence';
 import { buildIncidentContext } from './contextBuilder';
 import { GeminiAIProvider } from './providers/geminiProvider';
 import { SafetyPolicyEngine } from './safetyPolicy';
@@ -39,7 +40,12 @@ export class SkyOpsAIService {
   public async analyzeIncident(
     incident: Incident,
     associatedResource?: KubernetesResource | null,
-    options?: { force?: boolean; notes?: string[] }
+    options?: {
+      force?: boolean;
+      notes?: string[];
+      allResources?: KubernetesResource[];
+      metrics?: any;
+    }
   ): Promise<SkyOpsAIAnalysis> {
     const cacheKey = incident.id;
     const isForce = Boolean(options?.force);
@@ -73,15 +79,28 @@ export class SkyOpsAIService {
       return existingInFlight;
     }
 
-    // 3. Create execution promise
+    // 3. Run authoritative deterministic intelligence analysis
+    const deterministicIntelligence = SkyOpsIntelligenceEngine.analyzeIncident(
+      incident,
+      associatedResource,
+      options?.allResources || [],
+      options?.metrics
+    );
+
+    // 4. Create execution promise
     const executionPromise = (async (): Promise<SkyOpsAIAnalysis> => {
       const requestReceivedAt = Date.now();
       console.log(
         `[SkyOps AI] [Request Received] Starting root cause analysis for incident ${incident.id} (${incident.incidentType}) on cluster ${incident.clusterId} using provider ${this.provider.name}...`
       );
 
-      // Build sanitized, token-efficient incident context
-      const context = buildIncidentContext(incident, associatedResource, options?.notes);
+      // Build sanitized, token-efficient incident context with deterministic intelligence injected
+      const context = buildIncidentContext(
+        incident,
+        associatedResource,
+        options?.notes,
+        deterministicIntelligence
+      );
       const contextConstructedAt = Date.now();
       const contextConstructionMs = Math.max(0, contextConstructedAt - requestReceivedAt);
 
@@ -89,32 +108,48 @@ export class SkyOpsAIService {
       let analysis: SkyOpsAIAnalysis;
       try {
         analysis = await this.provider.analyzeIncident(context);
+
+        // Grounding guarantee: deterministic intelligence remains authoritative for confirmed facts
+        if (
+          deterministicIntelligence.primaryHypothesis?.status === 'CONFIRMED' &&
+          !deterministicIntelligence.isUnknownOrInconclusive
+        ) {
+          // Keep confidence high and grounded in observed facts
+          if (analysis.confidence < deterministicIntelligence.confidence) {
+            analysis.confidence = Math.max(analysis.confidence, deterministicIntelligence.confidence);
+          }
+        }
+        analysis.intelligence = deterministicIntelligence;
       } catch (err: any) {
         console.error(`[SkyOps AI] Unexpected error during AI analysis for ${incident.id}:`, err?.message || err);
         const fallbackAnalysis: Partial<SkyOpsAIAnalysis> = {
           incidentId: incident.id,
-          summary: `Incident ${incident.id} detected on ${incident.resourceKind} ${incident.resourceName}.`,
-          rootCause: incident.technicalDetails?.observedState || 'Automated AI analysis temporarily unavailable.',
-          confidence: 0.5,
-          evidence: [
-            { category: 'OBSERVED_FACT', source: 'SkyOps Detection Engine', detail: incident.title }
-          ],
+          summary: `Incident ${incident.id} detected on ${incident.resourceKind} ${incident.resourceName}: ${deterministicIntelligence.rootCause}.`,
+          rootCause: deterministicIntelligence.rootCause,
+          confidence: deterministicIntelligence.confidence,
+          confidenceExplanation: deterministicIntelligence.confidenceExplanation,
+          intelligence: deterministicIntelligence,
+          evidence: deterministicIntelligence.signals.map((s) => ({
+            category: s.category === 'FACT' ? 'OBSERVED_FACT' : 'AI_INFERENCE',
+            source: `${s.resourceKind} ${s.property}`,
+            detail: s.description
+          })),
           affectedResources: [
             { kind: incident.resourceKind, namespace: incident.namespace, name: incident.resourceName }
           ],
           recommendedFix: {
-            description: 'Review Kubernetes pod logs and resource definitions directly with kubectl.',
-            reason: 'Manual diagnostic review during AI service interruption.',
+            description: deterministicIntelligence.recommendation,
+            reason: deterministicIntelligence.explainability.whySelected,
             risk: 'LOW',
-            expectedImpact: 'No cluster modifications executed.',
-            rollback: 'None.'
+            expectedImpact: 'Deterministic remediation evaluation.',
+            rollback: 'None required.'
           },
           saferAlternative: {
             description: `Run 'kubectl describe ${incident.resourceKind.toLowerCase()} ${incident.resourceName} -n ${incident.namespace}'`,
             reason: 'Provides authoritative live cluster status directly from the Kubernetes API server.'
           },
           requiresApproval: true,
-          additionalEvidenceNeeded: [],
+          additionalEvidenceNeeded: deterministicIntelligence.explainability.missingEvidence || [],
           analyzedAt: Date.now(),
           provider: this.provider.name,
           model: this.provider.model,
@@ -123,6 +158,7 @@ export class SkyOpsAIService {
           executionSafe: true
         };
         analysis = SafetyPolicyEngine.validateAndEnforce(fallbackAnalysis, incident.id, context);
+        analysis.intelligence = deterministicIntelligence;
       }
 
       const responseReturnedAt = Date.now();

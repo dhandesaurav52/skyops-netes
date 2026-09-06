@@ -126,6 +126,11 @@ export interface ContainerDiagnostic {
   lastTerminationReason?: string;
   lastExitCode?: number;
   memoryLimit?: string;
+  memoryRequest?: string;
+  cpuLimit?: string;
+  cpuRequest?: string;
+  memoryUsage?: string;
+  cpuUsage?: string;
 }
 
 export interface ConditionDiagnostic {
@@ -194,6 +199,7 @@ export interface Incident {
   };
   updatedAt: number;
   aiAnalysis?: SkyOpsAIAnalysis;
+  intelligence?: IntelligenceAnalysis;
   resolutionSource?: 'MANUAL' | 'AUTOMATIC_VERIFIED';
   resolution?: {
     source: 'MANUAL' | 'AUTOMATIC_VERIFIED';
@@ -278,6 +284,7 @@ export interface K8sEvent {
 export interface KubernetesResource {
   id: string;
   clusterId: string;
+  clusterName?: string;
   kind: string;
   namespace: string;
   name: string;
@@ -292,7 +299,132 @@ export interface KubernetesResource {
   events?: K8sEvent[];
   uid?: string;
   apiVersion?: string;
+  nodeName?: string;
+  labels?: Record<string, string>;
   ownerReferences?: Array<{ uid?: string; kind?: string; name?: string; controller?: boolean }>;
+  metrics?: ResourceMetrics;
+  observedAt?: number;
+  ingestedAt?: number;
+}
+
+// ==========================================
+// Deep Observability & Resource Metrics Model
+// ==========================================
+
+export interface ResourceMetricValue {
+  value: number; // millicores for CPU, bytes for memory
+  unit: 'millicores' | 'bytes';
+  formatted: string; // e.g. "250m" or "512 MiB"
+}
+
+export interface ContainerResourceMetrics {
+  name: string;
+  cpu?: {
+    request?: ResourceMetricValue;
+    limit?: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+  };
+  memory?: {
+    request?: ResourceMetricValue;
+    limit?: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+  };
+  isUsageAvailable: boolean;
+}
+
+export type MetricsFreshnessStatus = 'FRESH' | 'DELAYED' | 'STALE' | 'UNAVAILABLE';
+
+export interface ResourceMetrics {
+  clusterId: string;
+  resourceKind: 'Cluster' | 'Node' | 'Workload' | 'Pod';
+  resourceName: string;
+  namespace?: string;
+  cpu: {
+    capacity?: ResourceMetricValue;
+    allocatable?: ResourceMetricValue;
+    request?: ResourceMetricValue;
+    limit?: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+    utilizationPercent?: number; // Calculated only when real usage and allocatable (or limit) exist
+  };
+  memory: {
+    capacity?: ResourceMetricValue;
+    allocatable?: ResourceMetricValue;
+    request?: ResourceMetricValue;
+    limit?: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+    utilizationPercent?: number;
+  };
+  containers?: ContainerResourceMetrics[];
+  observedAt: number;
+  ingestedAt: number;
+  freshnessStatus: MetricsFreshnessStatus;
+  metricsSource?: 'METRICS_SERVER' | 'KUBELET' | 'SPEC_STATUS_ONLY';
+  isUsageAvailable: boolean;
+  unavailableReason?: string;
+}
+
+export interface NodeMetricsSummary extends ResourceMetrics {
+  nodeName: string;
+  kubeletVersion?: string;
+  ready: boolean;
+  podCount: number;
+  podCapacity: number;
+  conditions: {
+    memoryPressure: boolean;
+    diskPressure: boolean;
+    pidPressure: boolean;
+    ready: boolean;
+  };
+}
+
+export interface WorkloadMetricsSummary extends ResourceMetrics {
+  workloadKind: string;
+  desiredReplicas: number;
+  readyReplicas: number;
+  childPodCount: number;
+}
+
+export interface ClusterObservabilityMetrics {
+  clusterId: string;
+  clusterName: string;
+  observedAt: number;
+  ingestedAt: number;
+  freshnessStatus: MetricsFreshnessStatus;
+  isUsageAvailable: boolean;
+  metricsSource?: 'METRICS_SERVER' | 'SPEC_STATUS_ONLY';
+  unavailableReason?: string;
+  nodeCount: number;
+  podCount: number;
+  cpu: {
+    capacity: ResourceMetricValue;
+    allocatable: ResourceMetricValue;
+    request: ResourceMetricValue;
+    limit: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+    utilizationPercent?: number;
+  };
+  memory: {
+    capacity: ResourceMetricValue;
+    allocatable: ResourceMetricValue;
+    request: ResourceMetricValue;
+    limit: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+    utilizationPercent?: number;
+  };
+  nodes: NodeMetricsSummary[];
+  workloads: WorkloadMetricsSummary[];
+}
+
+export interface MetricHistoryPoint {
+  timestamp: number;
+  cpuUsageMillicores?: number;
+  cpuRequestMillicores: number;
+  cpuCapacityMillicores: number;
+  memoryUsageBytes?: number;
+  memoryRequestBytes: number;
+  memoryCapacityBytes: number;
+  isUsageAvailable: boolean;
 }
 
 export interface OverviewMetrics {
@@ -307,6 +439,13 @@ export interface OverviewMetrics {
   mediumIncidents: number;
   lowIncidents: number;
   resolvedTodayCount: number;
+  totalNodes?: number;
+  totalPods?: number;
+  totalWorkloads?: number;
+  degradedWorkloads?: number;
+  crashingPods?: number;
+  connectedAgents?: number;
+  offlineAgents?: number;
 }
 
 export interface AgentManifestsResponse {
@@ -519,6 +658,156 @@ export interface SkyOpsAIAnalysis {
   errorMessage?: string;
   executionSafe: boolean; // Flag verifying deterministic safety policy was applied
   timing?: AITimingMetrics; // Millisecond latency breakdown across all pipeline stages
+  intelligence?: IntelligenceAnalysis; // Deterministic intelligence engine analysis
 }
+
+// ==========================================
+// SkyOps Structured Intelligence Engine Types
+// ==========================================
+
+export type SignalCategory =
+  | 'FACT'
+  | 'DERIVED_FACT'
+  | 'INFERENCE'
+  | 'HYPOTHESIS'
+  | 'RECOMMENDATION'
+  | 'EXECUTABLE_ACTION'
+  | 'VERIFIED_RESULT';
+
+export type HypothesisStatus =
+  | 'CONFIRMED'
+  | 'PLAUSIBLE'
+  | 'REFUTED'
+  | 'INSUFFICIENT_EVIDENCE';
+
+export interface CorrelatedSignal {
+  id: string;
+  category: SignalCategory;
+  source: 'kubelet' | 'events' | 'metrics' | 'spec' | 'status' | 'engine';
+  resourceKind: string;
+  resourceName: string;
+  namespace?: string;
+  property: string;
+  value: unknown;
+  description: string;
+  timestamp: number;
+  weight?: number; // 1 to 5 relative significance
+}
+
+export type ResourceRelationType =
+  | 'OWNED_BY'
+  | 'SCHEDULED_ON'
+  | 'MOUNTS_PVC'
+  | 'BACKED_BY_STORAGE_CLASS'
+  | 'EXPOSED_BY_SERVICE'
+  | 'CONTROLS_POD'
+  | 'PEER_ON_NODE';
+
+export interface ResourceRelationship {
+  source: {
+    kind: string;
+    name: string;
+    namespace?: string;
+    status?: string;
+  };
+  target: {
+    kind: string;
+    name: string;
+    namespace?: string;
+    status?: string;
+  };
+  relation: ResourceRelationType;
+  details?: string;
+  isImpacted?: boolean;
+}
+
+export interface EvidencePoint {
+  id: string;
+  signalId?: string;
+  description: string;
+  source: string;
+  weight: number;
+  timestamp?: number;
+}
+
+export interface RootCauseHypothesis {
+  id: string;
+  title: string;
+  category: string;
+  description: string;
+  score: number; // 0 to 100
+  status: HypothesisStatus;
+  supportingEvidence: EvidencePoint[];
+  contradictingEvidence: EvidencePoint[];
+  whySelectedOrRejected: string;
+}
+
+export interface CorrelatedTimelineEvent {
+  id: string;
+  timestamp: number;
+  title: string;
+  category: SignalCategory;
+  description: string;
+  source: string;
+  resourceKind: string;
+  resourceName: string;
+}
+
+export interface ExplainabilityReport {
+  whySelected: string;
+  rejectedAlternatives: Array<{
+    id: string;
+    title: string;
+    reason: string;
+    score: number;
+  }>;
+  evidenceSummary: {
+    factCount: number;
+    derivedFactCount: number;
+    inferenceCount: number;
+    supportingScore: number;
+    contradictingScore: number;
+  };
+  missingEvidence?: string[];
+}
+
+export interface ExecutableActionProposal {
+  actionType: string;
+  targetResource: {
+    kind: string;
+    name: string;
+    namespace: string;
+    container?: string;
+  };
+  fieldPath: string;
+  currentValue: string;
+  proposedValue: string;
+  isExecutable: boolean;
+  reason: string;
+}
+
+export interface IntelligenceAnalysis {
+  incidentId: string;
+  incidentType: IncidentType;
+  fingerprint: string;
+  clusterId: string;
+  clusterName: string;
+  analyzedAt: number;
+  rootCause: string;
+  rootCauseCategory: string;
+  confidence: number; // 0.0 to 1.0
+  confidenceLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+  confidenceExplanation: string;
+  primaryHypothesis: RootCauseHypothesis | null;
+  evaluatedHypotheses: RootCauseHypothesis[];
+  signals: CorrelatedSignal[];
+  relationships: ResourceRelationship[];
+  correlatedTimeline: CorrelatedTimelineEvent[];
+  explainability: ExplainabilityReport;
+  recommendation: string;
+  executableProposal?: ExecutableActionProposal;
+  isUnknownOrInconclusive: boolean;
+}
+
 
 

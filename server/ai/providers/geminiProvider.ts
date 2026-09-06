@@ -129,9 +129,29 @@ Core Principles:
    - ImagePullBackOff / ErrImagePull: Correlate invalid image reference → ErrImagePull event → ImagePullBackOff state. Generate exact image replacement change preview if a clean valid tag is identifiable.
    - CrashLoopBackOff: Investigate exit codes (e.g. 137 OOMKilled, 1 application error, 127 command not found), termination messages, restart counts, and environment/config. DO NOT blindly recommend an image change!
    - PVC / Storage issues: Investigate PVC conditions, StorageClass, PV binding, and volume mount specs.
-6. SAFETY & NO DIRECT EXECUTION: Never output raw automatic shell scripts. All remediations are structured proposals for human operator approval before execution by the SkyOps Agent.`;
+6. AUTHORITATIVE DETERMINISTIC INTELLIGENCE: The SkyOps Deterministic Intelligence Engine provides authoritative observed facts, derived telemetry, correlated signals, and scored hypotheses. Gemini must respect and be strictly grounded in these confirmed facts, and MUST NOT contradict or override confirmed cluster facts. Use your generative reasoning to synthesize, explain, and guide human operators.
+7. SAFETY & NO DIRECT EXECUTION: Never output raw automatic shell scripts. All remediations are structured proposals for human operator approval before execution by the SkyOps Agent.`;
+
+    const intelligenceText = context.intelligence
+      ? `
+DETERMINISTIC INTELLIGENCE ENGINE FINDINGS:
+- Authoritative Root Cause: ${context.intelligence.rootCause} (Category: ${context.intelligence.rootCauseCategory})
+- Engine Confidence: ${Math.round(context.intelligence.confidence * 100)}% (${context.intelligence.confidenceLevel})
+- Selection Rationale: ${context.intelligence.explainability.whySelected}
+- Primary Scored Hypothesis: ${context.intelligence.primaryHypothesis?.title || 'None'} [Status: ${context.intelligence.primaryHypothesis?.status || 'N/A'}, Score: ${context.intelligence.primaryHypothesis?.score ?? 'N/A'}]
+- Evaluated Alternative Hypotheses: ${context.intelligence.evaluatedHypotheses.map((h) => `${h.title} (Status: ${h.status}, Score: ${h.score})`).join('; ')}
+- Correlated Signals (Fact vs Inference):
+${context.intelligence.signals.map((s) => `  * [${s.category}] ${s.resourceKind}/${s.resourceName} -> ${s.property}: ${JSON.stringify(s.value)} (${s.description})`).slice(0, 15).join('\n')}
+- Correlated Timeline:
+${context.intelligence.correlatedTimeline.map((t) => `  * [${new Date(t.timestamp).toISOString()}] [${t.category}] ${t.title}: ${t.description}`).slice(0, 10).join('\n')}
+- Recommended Action: ${context.intelligence.recommendation}
+${context.intelligence.executableProposal ? `- Proposed Executable Action: ${context.intelligence.executableProposal.actionType} on ${context.intelligence.executableProposal.targetResource.kind}/${context.intelligence.executableProposal.targetResource.name} (field: ${context.intelligence.executableProposal.fieldPath})` : ''}
+`
+      : '';
 
     const userPrompt = `Perform deep evidence-driven reasoning for the following Kubernetes incident:
+
+${intelligenceText}
 
 INCIDENT METADATA:
 - Incident ID: ${context.incidentId}

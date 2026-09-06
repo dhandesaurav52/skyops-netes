@@ -9,6 +9,11 @@
       "id": "usr-sre-lead",
       "email": "dhandesaurav37@gmail.com",
       "name": "Alex Rivera (Staff SRE)"
+    },
+    "3CIKHqm0RPgvty84pbhPPSdv4562": {
+      "id": "3CIKHqm0RPgvty84pbhPPSdv4562",
+      "email": "dhandesaurav52@gmail.com",
+      "name": "saurav dhande"
     }
   },
   "orgs": {
@@ -32,6 +37,13 @@
       "slug": "alex-s-workspace",
       "createdAt": 1787589227187,
       "membersCount": 1
+    },
+    "org-3e149f888c5f": {
+      "id": "org-3e149f888c5f",
+      "name": "saurav's Workspace",
+      "slug": "saurav-s-workspace",
+      "createdAt": 1788682204142,
+      "membersCount": 1
     }
   },
   "members": {
@@ -51,6 +63,15 @@
         "name": "Alex Rivera (Staff SRE)",
         "role": "OWNER",
         "joinedAt": 1787589227187
+      }
+    ],
+    "org-3e149f888c5f": [
+      {
+        "userId": "3CIKHqm0RPgvty84pbhPPSdv4562",
+        "email": "dhandesaurav52@gmail.com",
+        "name": "saurav dhande",
+        "role": "OWNER",
+        "joinedAt": 1788682204142
       }
     ]
   },

@@ -19,11 +19,20 @@ import {
   SkyOpsAIAnalysis,
   StructuredRemediation,
   TimelineEvent,
-  User
+  User,
+  ClusterObservabilityMetrics,
+  MetricHistoryPoint,
+  NodeMetricsSummary,
+  WorkloadMetricsSummary
 } from '../src/types/index';
 import { AGENT_VERSION } from '../src/config/version';
 import { IncidentDetector } from './engine/detector';
 import { generateIncidentFingerprint } from './engine/fingerprint';
+import {
+  buildClusterObservabilityMetrics,
+  buildNodeMetricsSummary,
+  buildWorkloadMetricsSummary
+} from './metrics';
 
 export class DataStore {
   private users: Map<string, User> = new Map();
@@ -32,6 +41,8 @@ export class DataStore {
   private clusters: Map<string, Cluster> = new Map(); // clusterId -> cluster
   private clusterTokens: Map<string, { clusterId: string; orgId: string }> = new Map(); // tokenHash -> info
   private resources: Map<string, KubernetesResource[]> = new Map(); // clusterId -> resources
+  private clusterMetrics: Map<string, ClusterObservabilityMetrics> = new Map(); // clusterId -> ClusterObservabilityMetrics
+  private clusterMetricHistory: Map<string, MetricHistoryPoint[]> = new Map(); // clusterId -> MetricHistoryPoint[]
   private incidents: Map<string, Incident> = new Map(); // incidentId -> incident
   private incidentTimeline: Map<string, TimelineEvent[]> = new Map(); // incidentId -> events
   private incidentNotes: Map<string, IncidentNote[]> = new Map(); // incidentId -> notes
@@ -623,6 +634,38 @@ export class DataStore {
       }
     }
 
+    // Attach Node Metrics Summary to nodes
+    const podsByNode = new Map<string, KubernetesResource[]>();
+    for (const pod of pods) {
+      const nodeName = pod.nodeName || ((pod.specSummary?.nodeName as string) || '').trim() || 'unassigned';
+      if (!podsByNode.has(nodeName)) podsByNode.set(nodeName, []);
+      podsByNode.get(nodeName)!.push(pod);
+    }
+    for (const node of nodes) {
+      node.metrics = buildNodeMetricsSummary(node, podsByNode.get(node.name) || []);
+    }
+
+    // Compute and record cluster observability metrics
+    const clusterObservability = buildClusterObservabilityMetrics(cluster, incomingResources);
+    this.clusterMetrics.set(clusterId, clusterObservability);
+
+    const history = this.clusterMetricHistory.get(clusterId) || [];
+    const newPoint: MetricHistoryPoint = {
+      timestamp: clusterObservability.observedAt,
+      cpuUsageMillicores: clusterObservability.cpu.usage?.value,
+      cpuRequestMillicores: clusterObservability.cpu.request.value,
+      cpuCapacityMillicores: clusterObservability.cpu.capacity.value,
+      memoryUsageBytes: clusterObservability.memory.usage?.value,
+      memoryRequestBytes: clusterObservability.memory.request.value,
+      memoryCapacityBytes: clusterObservability.memory.capacity.value,
+      isUsageAvailable: clusterObservability.isUsageAvailable
+    };
+    history.push(newPoint);
+    if (history.length > 60) {
+      history.shift();
+    }
+    this.clusterMetricHistory.set(clusterId, history);
+
     // Ensure agent infrastructure components do not leave legacy incident tickets
     for (const [id, inc] of Array.from(this.incidents.entries())) {
       if (inc.clusterId === clusterId) {
@@ -1140,7 +1183,48 @@ export class DataStore {
   public getClusterResources(clusterId: string, orgId: string): KubernetesResource[] {
     const cluster = this.getCluster(clusterId, orgId);
     if (!cluster) return [];
-    return this.resources.get(clusterId) || [];
+    const list = this.resources.get(clusterId) || [];
+    return list.map((r) => ({ ...r, clusterName: cluster.name }));
+  }
+
+  public getAllResources(orgId: string): KubernetesResource[] {
+    const clusters = this.getClusters(orgId);
+    const result: KubernetesResource[] = [];
+    for (const cluster of clusters) {
+      const list = this.resources.get(cluster.id) || [];
+      for (const r of list) {
+        result.push({ ...r, clusterName: cluster.name });
+      }
+    }
+    return result;
+  }
+
+  // --- Observability & Metrics Foundation Query Methods ---
+  public getClusterObservabilityMetrics(clusterId: string, orgId: string): ClusterObservabilityMetrics | null {
+    const cluster = this.getCluster(clusterId, orgId);
+    if (!cluster) return null;
+    const cached = this.clusterMetrics.get(clusterId);
+    if (cached) return cached;
+    const res = this.resources.get(clusterId) || [];
+    const computed = buildClusterObservabilityMetrics(cluster, res);
+    this.clusterMetrics.set(clusterId, computed);
+    return computed;
+  }
+
+  public getNodeMetrics(clusterId: string, orgId: string): NodeMetricsSummary[] {
+    const metrics = this.getClusterObservabilityMetrics(clusterId, orgId);
+    return metrics ? metrics.nodes : [];
+  }
+
+  public getWorkloadMetrics(clusterId: string, orgId: string): WorkloadMetricsSummary[] {
+    const metrics = this.getClusterObservabilityMetrics(clusterId, orgId);
+    return metrics ? metrics.workloads : [];
+  }
+
+  public getClusterMetricHistory(clusterId: string, orgId: string): MetricHistoryPoint[] {
+    const cluster = this.getCluster(clusterId, orgId);
+    if (!cluster) return [];
+    return this.clusterMetricHistory.get(clusterId) || [];
   }
 
   // --- Deterministic Incident Engine & Deduplication ---
@@ -1693,6 +1777,42 @@ export class DataStore {
     const todayStart = new Date().setHours(0, 0, 0, 0);
     const resolvedToday = incidents.filter((i) => i.status === 'RESOLVED' && i.resolvedAt && i.resolvedAt >= todayStart);
 
+    let totalNodes = 0;
+    let totalPods = 0;
+    let totalWorkloads = 0;
+    let degradedWorkloads = 0;
+    let crashingPods = 0;
+
+    for (const cluster of clusters) {
+      totalNodes += cluster.nodeCount || 0;
+      totalPods += cluster.podCount || 0;
+      const resList = this.resources.get(cluster.id) || [];
+      for (const r of resList) {
+        const k = (r.kind || '').toLowerCase();
+        if (k === 'deployment' || k === 'statefulset' || k === 'daemonset' || k === 'job' || k === 'cronjob') {
+          totalWorkloads++;
+          if (r.health === 'CRITICAL' || r.health === 'WARNING') {
+            degradedWorkloads++;
+          }
+        }
+        if (k === 'pod') {
+          if (
+            r.health === 'CRITICAL' ||
+            r.status === 'CrashLoopBackOff' ||
+            r.status === 'ImagePullBackOff' ||
+            r.status === 'ErrImagePull' ||
+            r.status === 'OOMKilled' ||
+            r.status === 'Failed'
+          ) {
+            crashingPods++;
+          }
+        }
+      }
+    }
+
+    const connectedAgents = clusters.filter((c) => c.agentStatus === 'CONNECTED').length;
+    const offlineAgents = clusters.filter((c) => c.agentStatus === 'OFFLINE' || c.status === 'AGENT_OFFLINE').length;
+
     return {
       totalClusters: clusters.length,
       healthyClusters: clusters.filter((c) => c.status === 'HEALTHY').length,
@@ -1704,7 +1824,14 @@ export class DataStore {
       highIncidents: openIncidents.filter((i) => i.severity === 'HIGH').length,
       mediumIncidents: openIncidents.filter((i) => i.severity === 'MEDIUM').length,
       lowIncidents: openIncidents.filter((i) => i.severity === 'LOW' || i.severity === 'INFO').length,
-      resolvedTodayCount: resolvedToday.length
+      resolvedTodayCount: resolvedToday.length,
+      totalNodes,
+      totalPods,
+      totalWorkloads,
+      degradedWorkloads,
+      crashingPods,
+      connectedAgents,
+      offlineAgents
     };
   }
 

@@ -21,6 +21,7 @@ import {
 import { normalizeTelemetry } from './server/normalization';
 import { store } from './server/store';
 import { skyOpsAIService } from './server/ai/service';
+import { SkyOpsIntelligenceEngine } from './server/engine/intelligence';
 import { AGENT_DEFAULT_NAMESPACE, AGENT_VERSION } from './src/config/version';
 import { KubernetesResource } from './src/types/index';
 
@@ -487,6 +488,57 @@ app.get('/api/v1/clusters/:id/resources', requireUserAuth, requireOrgMembership,
   res.json({ resources });
 });
 
+// --- Observability & Metrics Foundation Endpoints ---
+app.get('/api/v1/clusters/:id/metrics', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const metrics = store.getClusterObservabilityMetrics(req.params.id, req.orgId!);
+  if (!metrics) {
+    return res.status(404).json({ error: 'Cluster not found or metrics unavailable' });
+  }
+  res.json({ metrics });
+});
+
+app.get('/api/v1/clusters/:id/metrics/nodes', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const nodes = store.getNodeMetrics(req.params.id, req.orgId!);
+  res.json({ nodes });
+});
+
+app.get('/api/v1/clusters/:id/metrics/workloads', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const workloads = store.getWorkloadMetrics(req.params.id, req.orgId!);
+  res.json({ workloads });
+});
+
+app.get('/api/v1/clusters/:id/metrics/history', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const history = store.getClusterMetricHistory(req.params.id, req.orgId!);
+  res.json({ history });
+});
+
+app.get('/api/v1/resources', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const { clusterId, kind, namespace, health, search } = req.query as Record<string, string | undefined>;
+  let resources = store.getAllResources(req.orgId!);
+
+  if (clusterId) {
+    resources = resources.filter((r) => r.clusterId === clusterId);
+  }
+  if (kind) {
+    const kinds = kind.split(',').map((k) => k.trim().toLowerCase());
+    resources = resources.filter((r) => kinds.includes(r.kind.toLowerCase()));
+  }
+  if (namespace) {
+    resources = resources.filter((r) => (r.namespace || 'default').toLowerCase() === namespace.toLowerCase());
+  }
+  if (health) {
+    resources = resources.filter((r) => r.health.toLowerCase() === health.toLowerCase());
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    resources = resources.filter(
+      (r) => r.name.toLowerCase().includes(q) || (r.namespace && r.namespace.toLowerCase().includes(q))
+    );
+  }
+
+  res.json({ resources });
+});
+
 // --- Agent Ingestion Endpoints (Separately Authenticated via requireAgentAuth) ---
 app.post('/api/v1/agent/register', requireAgentAuth, (req: AuthenticatedAgentRequest, res) => {
   const { agentVersion, k8sVersion } = req.body;
@@ -800,7 +852,38 @@ app.get('/api/v1/incidents/:id', requireUserAuth, requireOrgMembership, (req: Au
   const aiAnalysis = skyOpsAIService.getCachedAnalysis(incident.id) || store.getAIAnalysis(incident.id);
   const remediation = store.getRemediation(incident.id, req.orgId!);
 
-  res.json({ incident, timeline, notes, aiAnalysis, remediation });
+  // Compute or reuse authoritative deterministic intelligence analysis
+  const clusterResources = store.getClusterResources(incident.clusterId, req.orgId!);
+  const associatedResource = clusterResources.find(
+    (r) =>
+      r.kind.toLowerCase() === incident.resourceKind.toLowerCase() &&
+      r.name.toLowerCase() === incident.resourceName.toLowerCase() &&
+      (r.namespace || 'default').toLowerCase() === (incident.namespace || 'default').toLowerCase()
+  );
+  const intelligence =
+    aiAnalysis?.intelligence ||
+    SkyOpsIntelligenceEngine.analyzeIncident(incident, associatedResource, clusterResources);
+  incident.intelligence = intelligence;
+
+  res.json({ incident, timeline, notes, aiAnalysis, remediation, intelligence });
+});
+
+// --- SkyOps Deterministic Intelligence Endpoint ---
+app.get('/api/v1/incidents/:id/intelligence', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const incident = store.getIncident(req.params.id, req.orgId!);
+  if (!incident) {
+    return res.status(404).json({ error: 'Incident not found' });
+  }
+
+  const clusterResources = store.getClusterResources(incident.clusterId, req.orgId!);
+  const associatedResource = clusterResources.find(
+    (r) =>
+      r.kind.toLowerCase() === incident.resourceKind.toLowerCase() &&
+      r.name.toLowerCase() === incident.resourceName.toLowerCase() &&
+      (r.namespace || 'default').toLowerCase() === (incident.namespace || 'default').toLowerCase()
+  );
+  const intelligence = SkyOpsIntelligenceEngine.analyzeIncident(incident, associatedResource, clusterResources);
+  res.json({ intelligence });
 });
 
 // --- SkyOps AI Incident Root-Cause Analysis Endpoints ---
@@ -820,9 +903,12 @@ app.get('/api/v1/incidents/:id/ai-analysis', requireUserAuth, requireOrgMembersh
     );
     const notes = store.getIncidentNotes(incident.id, req.orgId!).map((n) => n.content);
 
-    const analysis = await skyOpsAIService.analyzeIncident(incident, associatedResource, { notes });
+    const analysis = await skyOpsAIService.analyzeIncident(incident, associatedResource, {
+      notes,
+      allResources: clusterResources
+    });
     store.saveAIAnalysis(incident.id, analysis);
-    res.json({ analysis, remediation: analysis.structuredRemediation });
+    res.json({ analysis, remediation: analysis.structuredRemediation, intelligence: analysis.intelligence });
   } catch (err: any) {
     console.error(`[SkyOps API] AI analysis error for ${req.params.id}:`, err);
     res.status(500).json({ error: err?.message || 'Failed to complete AI analysis' });
@@ -846,9 +932,13 @@ app.post('/api/v1/incidents/:id/ai-analysis', requireUserAuth, requireOrgMembers
     const notes = store.getIncidentNotes(incident.id, req.orgId!).map((n) => n.content);
     const force = req.body?.force === true;
 
-    const analysis = await skyOpsAIService.analyzeIncident(incident, associatedResource, { force, notes });
+    const analysis = await skyOpsAIService.analyzeIncident(incident, associatedResource, {
+      force,
+      notes,
+      allResources: clusterResources
+    });
     store.saveAIAnalysis(incident.id, analysis);
-    res.json({ analysis, remediation: analysis.structuredRemediation });
+    res.json({ analysis, remediation: analysis.structuredRemediation, intelligence: analysis.intelligence });
   } catch (err: any) {
     console.error(`[SkyOps API] Force AI analysis error for ${req.params.id}:`, err);
     res.status(500).json({ error: err?.message || 'Failed to trigger AI analysis' });
