@@ -39,7 +39,7 @@ import {
   TimelineEvent
 } from '../../types/index';
 import { formatDuration, formatReportDate, generateIncidentPdf, getPriorityLabel } from '../../utils/incidentPdfGenerator';
-import { SeverityBadge, StatusBadge } from '../common/Badges';
+import { SeverityBadge, StatusBadge, ProvenanceBadge } from '../common/Badges';
 import { Button, CopyButton, EmptyState, LoadingState } from '../common/UI';
 import { SkyOpsAIAnalysisCard } from './SkyOpsAIAnalysisCard';
 import { IncidentRemediationCard } from './IncidentRemediationCard';
@@ -608,10 +608,7 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
               {confirmedFact && (
                 <div className="p-3.5 rounded-lg bg-zinc-950/90 border border-emerald-900/50 space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1">
-                      <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                      CONFIRMED
-                    </span>
+                    <ProvenanceBadge type="CONFIRMED" label="CONFIRMED" />
                     <span className="text-[11px] font-mono text-zinc-400">Authoritative Observation</span>
                   </div>
                   <p className="text-xs text-zinc-200 leading-relaxed font-sans mt-1">
@@ -624,10 +621,7 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
               {inferenceHypothesis && (
                 <div className="p-3.5 rounded-lg bg-zinc-950/90 border border-sky-900/50 space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-950 text-sky-300 border border-sky-800 flex items-center gap-1">
-                      <Layers className="w-3 h-3 text-sky-400" />
-                      INFERENCE
-                    </span>
+                    <ProvenanceBadge type="INFERENCE" label="INFERENCE" />
                     <span className="text-[11px] font-mono text-zinc-400">Plausible Failure Explanation</span>
                   </div>
                   <p className="text-xs text-zinc-300 leading-relaxed font-sans mt-1">
@@ -640,10 +634,7 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
               {unknownInvestigationNote && (
                 <div className="p-3.5 rounded-lg bg-zinc-950/90 border border-amber-900/50 space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-800 flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3 text-amber-400" />
-                      UNKNOWN / NEEDS INVESTIGATION
-                    </span>
+                    <ProvenanceBadge type="UNKNOWN" label="UNKNOWN / NEEDS INVESTIGATION" />
                   </div>
                   <p className="text-xs text-amber-200/90 leading-relaxed font-sans mt-1">
                     {unknownInvestigationNote}
@@ -723,7 +714,16 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
           />
 
           {/* ========================================================================= */}
-          {/* 6. AI ANALYSIS */}
+          {/* 6. EVIDENCE & OBSERVABILITY SIGNALS */}
+          {/* ========================================================================= */}
+          <IncidentEvidenceSection
+            technicalDetails={tech}
+            aiAnalysis={aiAnalysis}
+            incidentType={incident.incidentType}
+          />
+
+          {/* ========================================================================= */}
+          {/* 7. AI ANALYSIS / DEEPER REASONING */}
           {/* ========================================================================= */}
           <SkyOpsAIAnalysisCard
             incidentId={incident.id}
@@ -735,15 +735,6 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
               setAiAnalysis(analysis);
               if (rem) setRemediation(rem);
             }}
-          />
-
-          {/* ========================================================================= */}
-          {/* 7. EVIDENCE & OBSERVABILITY SIGNALS */}
-          {/* ========================================================================= */}
-          <IncidentEvidenceSection
-            technicalDetails={tech}
-            aiAnalysis={aiAnalysis}
-            incidentType={incident.incidentType}
           />
 
           {/* ========================================================================= */}

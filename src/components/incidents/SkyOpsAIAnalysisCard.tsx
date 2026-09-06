@@ -24,6 +24,7 @@ import {
 } from '../../types';
 import { api } from '../../api/client';
 import { Button } from '../common/UI';
+import { ProvenanceBadge } from '../common/Badges';
 
 interface SkyOpsAIAnalysisCardProps {
   incidentId: string;
@@ -135,23 +136,11 @@ Ticket: ${analysis.incidentId}
   const getEvidenceCategoryBadge = (category?: AIEvidenceCategory) => {
     switch (category) {
       case 'OBSERVED_FACT':
-        return (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800">
-            CONFIRMED FACT
-          </span>
-        );
+        return <ProvenanceBadge type="CONFIRMED" label="CONFIRMED FACT" />;
       case 'AI_INFERENCE':
-        return (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-950/80 text-sky-300 border border-sky-800">
-            AI INFERENCE
-          </span>
-        );
+        return <ProvenanceBadge type="INFERENCE" label="AI INFERENCE" />;
       case 'PROPOSED_CHANGE':
-        return (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-purple-950/80 text-purple-300 border border-purple-800">
-            PROPOSED
-          </span>
-        );
+        return <ProvenanceBadge type="RECOMMENDATION" label="PROPOSED CHANGE" />;
       default:
         return (
           <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-zinc-900 text-zinc-400 border border-zinc-700">
@@ -172,7 +161,7 @@ Ticket: ${analysis.incidentId}
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-xs font-bold text-zinc-100 font-mono uppercase tracking-wider flex items-center gap-1.5">
-                6. SkyOps AI Incident Reasoning
+                7. SkyOps AI Analysis & Telemetry Correlation
               </h3>
               {analysis && (
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-sky-950/80 text-sky-300 border border-sky-800/70 flex items-center gap-1">
@@ -182,7 +171,7 @@ Ticket: ${analysis.incidentId}
               )}
             </div>
             <p className="text-[11px] text-zinc-400 mt-0.5">
-              Authoritative Kubernetes telemetry correlation, evidence classification, and verification criteria
+              Evidence correlation, inference classification, and telemetry verification criteria
             </p>
           </div>
         </div>

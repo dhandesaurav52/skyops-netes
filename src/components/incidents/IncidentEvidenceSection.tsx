@@ -12,6 +12,7 @@ import {
   Radio
 } from 'lucide-react';
 import { TechnicalDetails, SkyOpsAIAnalysis, AIEvidenceCategory } from '../../types';
+import { ProvenanceBadge, ProvenanceType } from '../common/Badges';
 
 interface IncidentEvidenceSectionProps {
   technicalDetails: TechnicalDetails;
@@ -28,14 +29,14 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
   const [isExpanded, setIsExpanded] = useState(true);
 
   // Compile confirmed signals for compact header summary
-  const signals: Array<{ label: string; detail: string; category: 'FACT' | 'INFERENCE' }> = [];
+  const signals: Array<{ label: string; detail: string; category: ProvenanceType }> = [];
 
   // Signal 1: Core Failure Reason
   const failureReason = tech.reason || incidentType;
   signals.push({
     label: 'Primary Signal',
     detail: failureReason,
-    category: 'FACT'
+    category: 'CONFIRMED'
   });
 
   // Signal 2: Container Waiting Reason or State
@@ -43,14 +44,14 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
   if (firstContainer?.waitingReason) {
     signals.push({
       label: 'Container State',
-      detail: `${firstContainer.name}: ${firstContainer.waitingReason}`,
-      category: 'FACT'
+      detail: `${firstContainer.name}: ${firstContainer.waitingReason}${firstContainer.waitingMessage ? ` — ${firstContainer.waitingMessage}` : ''}`,
+      category: 'CONFIRMED'
     });
   } else if (tech.exitCode !== undefined && tech.exitCode !== 0) {
     signals.push({
       label: 'Exit Code',
       detail: `Container terminated with code ${tech.exitCode}`,
-      category: 'FACT'
+      category: 'CONFIRMED'
     });
   }
 
@@ -58,15 +59,15 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
   const warningEvents = tech.events?.filter((e) => e.type === 'Warning') || [];
   if (warningEvents.length > 0) {
     signals.push({
-      label: 'Cluster Events',
-      detail: `${warningEvents.length} Warning event${warningEvents.length > 1 ? 's' : ''} (${warningEvents[0].reason})`,
-      category: 'FACT'
+      label: 'Cluster Warning Event',
+      detail: `${warningEvents[0].reason}: ${warningEvents[0].message || 'Observed by kubelet'}`,
+      category: 'CONFIRMED'
     });
   } else if (tech.events && tech.events.length > 0) {
     signals.push({
       label: 'Cluster Events',
       detail: `${tech.events.length} event${tech.events.length > 1 ? 's' : ''} recorded`,
-      category: 'FACT'
+      category: 'CONFIRMED'
     });
   }
 
@@ -75,7 +76,7 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
     signals.push({
       label: 'Engine Grounding',
       detail: tech.evidence[0].message,
-      category: 'FACT'
+      category: 'CONFIRMED'
     });
   }
 
@@ -91,31 +92,6 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
     }
   }
 
-  const getCategoryBadge = (cat: 'FACT' | 'INFERENCE' | AIEvidenceCategory) => {
-    switch (cat) {
-      case 'FACT':
-      case 'OBSERVED_FACT':
-        return (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800">
-            CONFIRMED FACT
-          </span>
-        );
-      case 'INFERENCE':
-      case 'AI_INFERENCE':
-        return (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-950/80 text-sky-300 border border-sky-800">
-            AI INFERENCE
-          </span>
-        );
-      default:
-        return (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-zinc-900 text-zinc-400 border border-zinc-700">
-            SIGNAL
-          </span>
-        );
-    }
-  };
-
   const totalEvents = tech.events?.length || 0;
   const totalContainers = tech.containers?.length || 0;
   const totalConditions = tech.conditions?.length || 0;
@@ -128,7 +104,7 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
         <div className="flex items-center gap-2">
           <ShieldCheck className="w-4 h-4 text-emerald-400" />
           <h3 className="text-xs font-bold text-zinc-200 font-mono uppercase tracking-wider">
-            7. Corroborating Evidence & Observability Signals
+            6. Corroborating Evidence & Observability Signals
           </h3>
           <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-zinc-950 text-zinc-400 border border-zinc-800">
             {signals.length} Signals Captured
@@ -156,8 +132,9 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
 
       {/* --- COMPACT SIGNALS SUMMARY (Fast Scan) --- */}
       <div className="space-y-1.5">
-        <span className="text-[10px] font-mono text-zinc-500 uppercase font-bold block">
-          Authoritative Telemetry Signals:
+        <span className="text-[10px] font-mono text-zinc-400 uppercase font-bold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          CONFIRMED SIGNALS (Observed Live Telemetry):
         </span>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
           {signals.map((sig, idx) => (
@@ -165,7 +142,9 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
               key={idx}
               className="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80 flex items-start gap-2"
             >
-              <div className="shrink-0 mt-0.5">{getCategoryBadge(sig.category)}</div>
+              <div className="shrink-0 mt-0.5">
+                <ProvenanceBadge type={sig.category} />
+              </div>
               <div className="min-w-0 flex-1">
                 <span className="text-[10px] font-mono text-zinc-400 uppercase font-bold block truncate">
                   {sig.label}
@@ -420,22 +399,37 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
             <div className="space-y-2">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
                 {/* AI Grounding Items */}
-                {aiAnalysis?.evidence?.map((ev, idx) => (
-                  <div key={`ai-${idx}`} className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 flex items-start gap-2">
-                    <div className="shrink-0 mt-0.5">{getCategoryBadge(ev.category || 'OBSERVED_FACT')}</div>
-                    <div className="min-w-0 flex-1">
-                      <span className="font-mono text-[10px] font-bold text-zinc-400 uppercase block">
-                        {ev.source}
-                      </span>
-                      <p className="text-zinc-200 text-xs mt-0.5 break-words font-mono">{ev.detail}</p>
+                {aiAnalysis?.evidence?.map((ev, idx) => {
+                  const type =
+                    ev.category === 'OBSERVED_FACT'
+                      ? 'CONFIRMED'
+                      : ev.category === 'PROPOSED_CHANGE'
+                      ? 'RECOMMENDATION'
+                      : 'INFERENCE';
+                  return (
+                    <div key={`ai-${idx}`} className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 flex items-start gap-2">
+                      <div className="shrink-0 mt-0.5">
+                        <ProvenanceBadge
+                          type={type}
+                          label={ev.category === 'OBSERVED_FACT' ? 'CONFIRMED FACT' : ev.category === 'PROPOSED_CHANGE' ? 'PROPOSED' : 'INFERENCE'}
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="font-mono text-[10px] font-bold text-zinc-400 uppercase block">
+                          {ev.source}
+                        </span>
+                        <p className="text-zinc-200 text-xs mt-0.5 break-words font-mono">{ev.detail}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
                 {/* Technical Details Evidence Items */}
                 {tech.evidence?.map((ev, idx) => (
                   <div key={`tech-${idx}`} className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 flex items-start gap-2">
-                    <div className="shrink-0 mt-0.5">{getCategoryBadge('FACT')}</div>
+                    <div className="shrink-0 mt-0.5">
+                      <ProvenanceBadge type="CONFIRMED" label="CONFIRMED FACT" />
+                    </div>
                     <div className="min-w-0 flex-1">
                       <span className="font-mono text-[10px] font-bold text-zinc-400 uppercase block">
                         {ev.source || 'Kubelet Telemetry'}

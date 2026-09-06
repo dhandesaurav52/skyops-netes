@@ -1,5 +1,100 @@
 import React from 'react';
+import {
+  CheckCircle2,
+  ShieldCheck,
+  Layers,
+  Sparkles,
+  Play,
+  UserCheck,
+  Info,
+  Compass,
+  AlertTriangle
+} from 'lucide-react';
 import { AgentStatus, ClusterStatus, IncidentSeverity, IncidentStatus } from '../../types/index';
+
+export type ProvenanceType =
+  | 'CONFIRMED'
+  | 'INFERENCE'
+  | 'RECOMMENDATION'
+  | 'EXECUTABLE'
+  | 'VERIFIED'
+  | 'MANUAL'
+  | 'UNKNOWN';
+
+export const ProvenanceBadge: React.FC<{
+  type: ProvenanceType;
+  label?: string;
+  size?: 'sm' | 'md';
+}> = ({ type, label, size = 'sm' }) => {
+  const padding = size === 'sm' ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs';
+
+  switch (type) {
+    case 'CONFIRMED':
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-mono font-bold rounded border bg-emerald-950/80 text-emerald-300 border-emerald-700/80 ${padding}`}
+        >
+          <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" />
+          {label || 'CONFIRMED'}
+        </span>
+      );
+    case 'INFERENCE':
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-mono font-bold rounded border bg-sky-950/80 text-sky-300 border-sky-700/80 ${padding}`}
+        >
+          <Layers className="w-3 h-3 text-sky-400 shrink-0" />
+          {label || 'INFERENCE'}
+        </span>
+      );
+    case 'RECOMMENDATION':
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-mono font-bold rounded border bg-purple-950/80 text-purple-300 border-purple-700/80 ${padding}`}
+        >
+          <Compass className="w-3 h-3 text-purple-400 shrink-0" />
+          {label || 'RECOMMENDATION'}
+        </span>
+      );
+    case 'EXECUTABLE':
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-mono font-bold rounded border bg-teal-950/90 text-teal-300 border-teal-700/80 ${padding}`}
+        >
+          <Play className="w-2.5 h-2.5 text-teal-400 shrink-0" />
+          {label || 'EXECUTABLE'}
+        </span>
+      );
+    case 'VERIFIED':
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-mono font-bold rounded border bg-emerald-950/90 text-emerald-300 border-emerald-600 ${padding}`}
+        >
+          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+          {label || 'VERIFIED'}
+        </span>
+      );
+    case 'MANUAL':
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-mono font-bold rounded border bg-zinc-900 text-zinc-300 border-zinc-700 ${padding}`}
+        >
+          <UserCheck className="w-3 h-3 text-sky-400 shrink-0" />
+          {label || 'MANUAL'}
+        </span>
+      );
+    case 'UNKNOWN':
+    default:
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-mono font-bold rounded border bg-amber-950/80 text-amber-300 border-amber-800/80 ${padding}`}
+        >
+          <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />
+          {label || 'UNKNOWN / NEEDS INVESTIGATION'}
+        </span>
+      );
+  }
+};
 
 export const SeverityBadge: React.FC<{ severity: IncidentSeverity; size?: 'sm' | 'md' }> = ({
   severity,
