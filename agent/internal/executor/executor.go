@@ -48,6 +48,10 @@ func (e *Executor) Execute(ctx context.Context, action transport.RemediationActi
 	for i := range pod.Spec.Containers {
 		if pod.Spec.Containers[i].Name == action.Target.Container {
 			found = true
+			if pod.Spec.Containers[i].Image == action.ProposedValue {
+				// Idempotency: Pod container already has the proposed target image
+				return nil
+			}
 			if pod.Spec.Containers[i].Image != action.ExpectedCurrentValue {
 				return fmt.Errorf("expected image %q does not match live value %q", action.ExpectedCurrentValue, pod.Spec.Containers[i].Image)
 			}

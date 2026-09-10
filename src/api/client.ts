@@ -395,6 +395,104 @@ class ApiClient {
       body: JSON.stringify({ clusterId, scenario })
     });
   }
+
+  // --- Enterprise Audit Center ---
+  async getAuditLogs(params?: {
+    page?: number;
+    limit?: number;
+    actorId?: string;
+    action?: string;
+    resourceType?: string;
+    resourceId?: string;
+    search?: string;
+    fromTimestamp?: number;
+    toTimestamp?: number;
+  }): Promise<{
+    items: any[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, val]) => {
+        if (val !== undefined && val !== null && val !== '') {
+          query.set(key, String(val));
+        }
+      });
+    }
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return this.request(`/api/v1/audit${qStr}`);
+  }
+
+  // --- Integrations & Webhooks ---
+  async getWebhooks(): Promise<{ webhooks: any[] }> {
+    return this.request('/api/v1/integrations/webhooks');
+  }
+
+  async createWebhook(data: { name: string; url: string; secret?: string; enabledEvents?: string[] }): Promise<{ webhook: any }> {
+    return this.request('/api/v1/integrations/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async updateWebhook(id: string, data: any): Promise<{ webhook: any }> {
+    return this.request(`/api/v1/integrations/webhooks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async deleteWebhook(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/api/v1/integrations/webhooks/${id}`, {
+      method: 'DELETE'
+    });
+  }
+
+  async testWebhook(id: string): Promise<{ success: boolean; statusCode?: number; latencyMs?: number; responseBody?: string; error?: string }> {
+    return this.request(`/api/v1/integrations/webhooks/${id}/test`, {
+      method: 'POST'
+    });
+  }
+
+  async getWebhookDeliveries(id: string): Promise<{ deliveries: any[] }> {
+    return this.request(`/api/v1/integrations/webhooks/${id}/deliveries`);
+  }
+
+  // --- Organization Usage & Quotas ---
+  async getOrgUsage(): Promise<{ usage: any }> {
+    return this.request('/api/v1/orgs/usage');
+  }
+
+  // --- System Health & Platform Metrics ---
+  async getSystemHealth(): Promise<any> {
+    return this.request('/api/v1/system/health');
+  }
+
+  async getSystemMetrics(): Promise<any> {
+    return this.request('/api/v1/system/metrics');
+  }
+
+  // --- Cluster Token Rotation & Revocation ---
+  async rotateClusterToken(clusterId: string): Promise<{
+    success: boolean;
+    cluster: Cluster;
+    token: string;
+    connectionCode: string;
+    installKey: string;
+  }> {
+    return this.request(`/api/v1/clusters/${clusterId}/rotate-token`, {
+      method: 'POST'
+    });
+  }
+
+  async revokeClusterToken(clusterId: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/api/v1/clusters/${clusterId}/revoke-token`, {
+      method: 'POST'
+    });
+  }
 }
 
 export const api = new ApiClient();

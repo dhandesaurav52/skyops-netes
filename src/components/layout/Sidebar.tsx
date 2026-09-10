@@ -16,7 +16,7 @@ import {
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
-export type NavigationTab = 'overview' | 'clusters' | 'incidents' | 'settings';
+export type NavigationTab = 'overview' | 'clusters' | 'incidents' | 'audit' | 'settings';
 
 interface SidebarProps {
   activeTab: NavigationTab;
@@ -73,6 +73,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Incidents',
       icon: <AlertTriangle className="w-4 h-4" />,
       badge: openIncidentsCount
+    },
+    {
+      id: 'audit',
+      label: 'Audit & Compliance',
+      icon: <Shield className="w-4 h-4" />
     },
     {
       id: 'settings',

@@ -9,9 +9,15 @@ import {
   AuthenticatedUserRequest,
   requireAgentAuth,
   requireOrgMembership,
+  requirePermission,
   requireRole,
   requireUserAuth
 } from './server/auth';
+import { config, isProduction } from './server/config';
+import { systemObservability } from './server/observability/metrics';
+import { auditService } from './server/audit';
+import { webhookService } from './server/integrations/webhooks';
+import { correlationIdMiddleware, sendApiError } from './server/middleware/requestId';
 import {
   generateHelmCommand,
   generateInstallScript,
@@ -36,7 +42,7 @@ app.use(
     origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-org-id']
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-org-id', 'x-request-id', 'x-skyops-agent-version']
   })
 );
 
@@ -46,8 +52,28 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(correlationIdMiddleware);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// --- Platform Health & Self-Observability Probes ---
+app.get('/health/live', (req, res) => {
+  res.json({ status: 'ok', liveness: true, timestamp: Date.now() });
+});
+
+app.get('/health/ready', (req, res) => {
+  const health = systemObservability.getHealth(true);
+  const code = health.readiness ? 200 : 503;
+  res.status(code).json(health);
+});
+
+app.get('/api/v1/system/health', (req, res) => {
+  res.json(systemObservability.getHealth(true));
+});
+
+app.get('/api/v1/system/metrics', requireUserAuth, requireOrgMembership, requireRole(['OWNER', 'ADMIN']), (req: AuthenticatedUserRequest, res) => {
+  res.json(systemObservability.getSnapshot());
+});
 
 // --- Structured Request Logging ---
 app.use((req, res, next) => {
@@ -225,6 +251,25 @@ app.post(
   }
 );
 
+app.post(
+  '/api/v1/clusters/:id/rotate-token',
+  requireUserAuth,
+  requireOrgMembership,
+  requirePermission('cluster.manage'),
+  (req: AuthenticatedUserRequest, res) => {
+    try {
+      const { cluster, rawToken, connectionCode, installKey } = store.rotateAgentToken(
+        req.params.id,
+        req.orgId!,
+        { id: req.user!.id, name: req.user!.name }
+      );
+      res.json({ success: true, cluster, token: rawToken, connectionCode, installKey });
+    } catch (err: any) {
+      res.status(404).json({ error: err?.message || 'Cluster not found' });
+    }
+  }
+);
+
 // Disconnect agent from cluster
 app.post(
   '/api/v1/clusters/:id/disconnect',
@@ -237,6 +282,20 @@ app.post(
       return res.status(404).json({ error: 'Cluster not found' });
     }
     res.json({ success: true, message: 'Cluster agent disconnected successfully' });
+  }
+);
+
+app.post(
+  '/api/v1/clusters/:id/revoke-token',
+  requireUserAuth,
+  requireOrgMembership,
+  requirePermission('cluster.manage'),
+  (req: AuthenticatedUserRequest, res) => {
+    const success = store.revokeAgentToken(req.params.id, req.orgId!, { id: req.user!.id, name: req.user!.name });
+    if (!success) {
+      return res.status(404).json({ error: 'Cluster not found or already disconnected' });
+    }
+    res.json({ success: true, message: 'Cluster agent token revoked and cluster disconnected' });
   }
 );
 
@@ -1031,6 +1090,97 @@ app.post(
   }
 );
 
+// --- Remediation Policy & Audit Endpoints ---
+const UpdateRemediationPolicySchema = z.object({
+  clusterId: z.string().optional(),
+  remediationMode: z.enum(['MANUAL_ONLY', 'APPROVAL_REQUIRED', 'CONTROLLED_AUTONOMOUS']).optional(),
+  allowedActionTypes: z.array(z.string()).optional(),
+  targetKindAllowlist: z.array(z.string()).optional(),
+  namespaceAllowlist: z.array(z.string()).optional(),
+  namespaceDenylist: z.array(z.string()).optional(),
+  environmentAllowlist: z.array(z.string()).optional(),
+  maxRiskLevel: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).optional(),
+  requireHumanApproval: z.boolean().optional(),
+  maxAutonomousPerHour: z.number().min(1).max(100).optional(),
+  maxAttemptsPerIncident: z.number().min(1).max(10).optional(),
+  circuitBreakerCooldownMs: z.number().min(1000).max(86400000).optional(),
+  allowStandalonePodsOnly: z.boolean().optional(),
+  maxTelemetryAgeMs: z.number().min(5000).max(3600000).optional(),
+  actionExpirationMs: z.number().min(30000).max(3600000).optional(),
+  leaseTimeoutMs: z.number().min(10000).max(600000).optional()
+});
+
+app.get('/api/v1/remediation/policy', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const clusterId = typeof req.query.clusterId === 'string' ? req.query.clusterId : undefined;
+  const policy = store.getRemediationPolicy(req.orgId!, clusterId);
+  res.json({ policy });
+});
+
+app.put(
+  '/api/v1/remediation/policy',
+  requireUserAuth,
+  requireOrgMembership,
+  requireRole(['OWNER', 'ADMIN']),
+  (req: AuthenticatedUserRequest, res) => {
+    const parsed = UpdateRemediationPolicySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid policy payload' });
+    }
+
+    try {
+      const clusterId = parsed.data.clusterId || (typeof req.query.clusterId === 'string' ? req.query.clusterId : undefined);
+      const updated = store.updateRemediationPolicy(
+        req.orgId!,
+        parsed.data,
+        clusterId,
+        { id: req.user!.id, name: req.user!.name }
+      );
+      res.json({ success: true, policy: updated });
+    } catch (err: any) {
+      console.error('[SkyOps API] Update policy error:', err);
+      res.status(400).json({ error: err?.message || 'Failed to update policy' });
+    }
+  }
+);
+
+app.get('/api/v1/incidents/:id/remediation/audit', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  try {
+    const audit = store.getRemediationAuditTrail(req.params.id, req.orgId!);
+    res.json(audit);
+  } catch (err: any) {
+    res.status(404).json({ error: err?.message || 'Audit trail not found' });
+  }
+});
+
+const CancelRemediationSchema = z.object({
+  actionId: z.string().min(1)
+});
+
+app.post(
+  '/api/v1/incidents/:id/remediation/cancel',
+  requireUserAuth,
+  requireOrgMembership,
+  requireRole(['OWNER', 'ADMIN', 'ENGINEER']),
+  (req: AuthenticatedUserRequest, res) => {
+    const parsed = CancelRemediationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Action ID is required' });
+    }
+
+    try {
+      const action = store.cancelRemediationAction(
+        parsed.data.actionId,
+        req.orgId!,
+        { id: req.user!.id, name: req.user!.name }
+      );
+      res.json({ success: true, action });
+    } catch (err: any) {
+      console.error(`[SkyOps API] Remediation cancel error:`, err);
+      res.status(400).json({ error: err?.message || 'Failed to cancel remediation' });
+    }
+  }
+);
+
 
 const UpdateIncidentSchema = z.object({
   status: z.enum(['OPEN', 'ACKNOWLEDGED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']).optional(),
@@ -1156,8 +1306,143 @@ app.get('/api/v1/overview', requireUserAuth, requireOrgMembership, (req: Authent
   });
 });
 
-// --- Development & QA Scenario Simulation ---
+// --- Audit Center Endpoints ---
+app.get('/api/v1/audit', requireUserAuth, requireOrgMembership, requirePermission('audit.read'), (req: AuthenticatedUserRequest, res) => {
+  const page = parseInt(req.query.page as string, 10) || 1;
+  const limit = parseInt(req.query.limit as string, 10) || 25;
+  const actorId = typeof req.query.actorId === 'string' ? req.query.actorId : undefined;
+  const action = typeof req.query.action === 'string' ? req.query.action : undefined;
+  const resourceType = typeof req.query.resourceType === 'string' ? req.query.resourceType : undefined;
+  const resourceId = typeof req.query.resourceId === 'string' ? req.query.resourceId : undefined;
+  const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+  const fromTimestamp = req.query.fromTimestamp ? parseInt(req.query.fromTimestamp as string, 10) : undefined;
+  const toTimestamp = req.query.toTimestamp ? parseInt(req.query.toTimestamp as string, 10) : undefined;
+
+  const result = auditService.query({
+    orgId: req.orgId!,
+    page,
+    limit,
+    actorId,
+    action,
+    resourceType,
+    resourceId,
+    search,
+    fromTimestamp,
+    toTimestamp
+  });
+
+  res.json(result);
+});
+
+app.get('/api/v1/audit/export', requireUserAuth, requireOrgMembership, requirePermission('audit.read'), (req: AuthenticatedUserRequest, res) => {
+  const format = req.query.format === 'csv' ? 'csv' : 'json';
+  const actorId = typeof req.query.actorId === 'string' ? req.query.actorId : undefined;
+  const action = typeof req.query.action === 'string' ? req.query.action : undefined;
+  const resourceType = typeof req.query.resourceType === 'string' ? req.query.resourceType : undefined;
+
+  const filters = { orgId: req.orgId!, actorId, action, resourceType };
+
+  if (format === 'csv') {
+    const csv = auditService.exportCsv(filters);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="skyops_audit_${req.orgId}_${Date.now()}.csv"`);
+    return res.send(csv);
+  }
+
+  const result = auditService.query({ ...filters, page: 1, limit: 10000 });
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="skyops_audit_${req.orgId}_${Date.now()}.json"`);
+  res.json(result.items);
+});
+
+// --- Webhooks & Integrations Endpoints ---
+const CreateWebhookSchema = z.object({
+  name: z.string().min(1).max(100),
+  url: z.string().url().max(500),
+  secret: z.string().min(8).max(100).optional(),
+  enabledEvents: z.array(z.string()).optional()
+});
+
+app.get('/api/v1/integrations/webhooks', requireUserAuth, requireOrgMembership, requirePermission('integration.manage'), (req: AuthenticatedUserRequest, res) => {
+  const webhooks = webhookService.getWebhooks(req.orgId!);
+  res.json({ webhooks });
+});
+
+app.post('/api/v1/integrations/webhooks', requireUserAuth, requireOrgMembership, requirePermission('integration.manage'), (req: AuthenticatedUserRequest, res) => {
+  const parsed = CreateWebhookSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid webhook payload' });
+  }
+
+  const wh = webhookService.createWebhook(req.orgId!, parsed.data as any);
+  auditService.record({
+    orgId: req.orgId!,
+    actorId: req.user!.id,
+    actorName: req.user!.name,
+    actorType: 'USER',
+    action: 'integration.webhook_created',
+    resourceType: 'INTEGRATION',
+    resourceId: wh.id,
+    result: 'SUCCESS',
+    details: { name: wh.name, url: wh.url }
+  });
+  res.status(201).json({ webhook: wh });
+});
+
+app.put('/api/v1/integrations/webhooks/:id', requireUserAuth, requireOrgMembership, requirePermission('integration.manage'), (req: AuthenticatedUserRequest, res) => {
+  const updated = webhookService.updateWebhook(req.params.id, req.orgId!, req.body);
+  if (!updated) {
+    return res.status(404).json({ error: 'Webhook not found' });
+  }
+  res.json({ webhook: updated });
+});
+
+app.delete('/api/v1/integrations/webhooks/:id', requireUserAuth, requireOrgMembership, requirePermission('integration.manage'), (req: AuthenticatedUserRequest, res) => {
+  const success = webhookService.deleteWebhook(req.params.id, req.orgId!);
+  if (!success) {
+    return res.status(404).json({ error: 'Webhook not found' });
+  }
+  auditService.record({
+    orgId: req.orgId!,
+    actorId: req.user!.id,
+    actorName: req.user!.name,
+    actorType: 'USER',
+    action: 'integration.webhook_deleted',
+    resourceType: 'INTEGRATION',
+    resourceId: req.params.id,
+    result: 'SUCCESS'
+  });
+  res.json({ success: true, message: 'Webhook deleted' });
+});
+
+app.post('/api/v1/integrations/webhooks/:id/test', requireUserAuth, requireOrgMembership, requirePermission('integration.manage'), async (req: AuthenticatedUserRequest, res) => {
+  const result = await webhookService.testWebhook(req.params.id, req.orgId!);
+  res.json(result);
+});
+
+app.get('/api/v1/integrations/webhooks/:id/deliveries', requireUserAuth, requireOrgMembership, requirePermission('integration.manage'), (req: AuthenticatedUserRequest, res) => {
+  const deliveries = webhookService.getDeliveries(req.orgId!, req.params.id);
+  res.json({ deliveries });
+});
+
+// --- Organization Usage Tracking ---
+app.get('/api/v1/orgs/usage', requireUserAuth, requireOrgMembership, requirePermission('billing.read'), (req: AuthenticatedUserRequest, res) => {
+  const usage = store.getOrgUsage(req.orgId!);
+  res.json({ usage });
+});
+
+// --- Development & QA Scenario Simulation (Strictly Protected) ---
 app.post('/api/v1/dev/simulate-scenario', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  if (isProduction || !config.ENABLE_DEV_SIMULATION) {
+    return res.status(403).json({
+      error: 'Forbidden: Development simulation and failure injection endpoints are disabled in production environments.',
+      errorDetails: {
+        code: 'SIMULATION_DISABLED_IN_PROD',
+        message: 'Development simulation and failure injection endpoints are disabled in production environments.'
+      }
+    });
+  }
+
   const { clusterId, scenario } = req.body;
   if (!clusterId || !scenario) {
     return res.status(400).json({ error: 'clusterId and scenario are required' });
@@ -1176,7 +1461,7 @@ app.all('/api/*', (req, res) => {
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error('[SkyOps Server Error]', err);
   if (req.path.startsWith('/api/')) {
-    res.status(500).json({ error: err?.message || 'Internal Server Error' });
+    sendApiError(res, 500, 'INTERNAL_SERVER_ERROR', err?.message || 'Internal Server Error');
   } else {
     next(err);
   }

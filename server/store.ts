@@ -16,6 +16,10 @@ import {
   OverviewMetrics,
   Role,
   RemediationAction,
+  RemediationPolicy,
+  RemediationMode,
+  RemediationActionStatus,
+  AIRiskLevel,
   SkyOpsAIAnalysis,
   StructuredRemediation,
   TimelineEvent,
@@ -28,11 +32,16 @@ import {
 import { AGENT_VERSION } from '../src/config/version';
 import { IncidentDetector } from './engine/detector';
 import { generateIncidentFingerprint } from './engine/fingerprint';
+import { RemediationPolicyEngine } from './engine/policy';
 import {
   buildClusterObservabilityMetrics,
   buildNodeMetricsSummary,
   buildWorkloadMetricsSummary
 } from './metrics';
+import { auditService } from './audit';
+import { webhookService } from './integrations/webhooks';
+import { systemObservability } from './observability/metrics';
+import { OrgUsageSummary } from './repositories/types';
 
 export class DataStore {
   private users: Map<string, User> = new Map();
@@ -49,6 +58,11 @@ export class DataStore {
   private remediationActions: Map<string, RemediationAction> = new Map();
   private remediations: Map<string, StructuredRemediation> = new Map(); // incidentId -> StructuredRemediation
   private aiAnalyses: Map<string, SkyOpsAIAnalysis> = new Map(); // incidentId -> SkyOpsAIAnalysis
+  private policies: Map<string, RemediationPolicy> = new Map(); // org:<orgId> or cluster:<clusterId>
+  private incidentFailures: Map<string, number> = new Map(); // incidentId -> failed attempts
+  private clusterActionHistory: Map<string, number[]> = new Map(); // clusterId -> timestamps
+  private telemetryBatchCounts: Map<string, number> = new Map(); // orgId -> count
+  private telemetryResourceCounts: Map<string, number> = new Map(); // orgId -> count
   private incidentCounter = 1001;
   private storagePath = path.join(process.cwd(), 'data', 'skyops_store.json');
   private saveTimeout: NodeJS.Timeout | null = null;
@@ -78,6 +92,8 @@ export class DataStore {
         if (data.remediationActions) this.remediationActions = new Map(Object.entries(data.remediationActions));
         if (data.remediations) this.remediations = new Map(Object.entries(data.remediations));
         if (data.aiAnalyses) this.aiAnalyses = new Map(Object.entries(data.aiAnalyses));
+        if (data.policies) this.policies = new Map(Object.entries(data.policies));
+        if (data.incidentFailures) this.incidentFailures = new Map(Object.entries(data.incidentFailures));
         if (data.incidentCounter) this.incidentCounter = data.incidentCounter;
 
         // Clean up any historical false-positive incidents generated against the SkyOps telemetry agent
@@ -124,6 +140,8 @@ export class DataStore {
           remediationActions: Object.fromEntries(this.remediationActions),
           remediations: Object.fromEntries(this.remediations),
           aiAnalyses: Object.fromEntries(this.aiAnalyses),
+          policies: Object.fromEntries(this.policies),
+          incidentFailures: Object.fromEntries(this.incidentFailures),
           incidentCounter: this.incidentCounter
         };
         fs.writeFileSync(this.storagePath, JSON.stringify(data, null, 2), 'utf8');
@@ -455,6 +473,48 @@ export class DataStore {
     return { cluster, rawToken, connectionCode, installKey };
   }
 
+  public rotateAgentToken(
+    clusterId: string,
+    orgId: string,
+    actor?: { id: string; name: string }
+  ): { cluster: Cluster; rawToken: string; connectionCode: string; installKey: string } {
+    const res = this.regenerateClusterCredentials(clusterId, orgId);
+    auditService.record({
+      orgId,
+      actorId: actor?.id || 'system',
+      actorName: actor?.name || 'System Operator',
+      actorType: actor ? 'USER' : 'SYSTEM',
+      action: 'cluster.token_rotated',
+      resourceType: 'CLUSTER',
+      resourceId: clusterId,
+      result: 'SUCCESS',
+      details: { clusterName: res.cluster.name }
+    });
+    return res;
+  }
+
+  public revokeAgentToken(
+    clusterId: string,
+    orgId: string,
+    actor?: { id: string; name: string }
+  ): boolean {
+    const success = this.disconnectCluster(clusterId, orgId);
+    if (success) {
+      auditService.record({
+        orgId,
+        actorId: actor?.id || 'system',
+        actorName: actor?.name || 'System Operator',
+        actorType: actor ? 'USER' : 'SYSTEM',
+        action: 'cluster.token_revoked',
+        resourceType: 'CLUSTER',
+        resourceId: clusterId,
+        result: 'SUCCESS'
+      });
+      webhookService.dispatchEvent(orgId, 'cluster.disconnected', { clusterId });
+    }
+    return success;
+  }
+
   public disconnectCluster(clusterId: string, orgId: string): boolean {
     const cluster = this.clusters.get(clusterId);
     if (!cluster || cluster.orgId !== orgId) return false;
@@ -617,11 +677,30 @@ export class DataStore {
     const cluster = this.clusters.get(clusterId);
     if (!cluster) return;
 
-    this.resources.set(clusterId, incomingResources);
+    let finalResources: KubernetesResource[] = incomingResources;
+    if (!snapshotComplete) {
+      const existing = this.resources.get(clusterId) || [];
+      if (existing.length > 0) {
+        const incomingMap = new Map<string, KubernetesResource>();
+        for (const res of incomingResources) {
+          incomingMap.set(res.id, res);
+        }
+        const merged = existing.map((r) => incomingMap.get(r.id) || r);
+        const existingIds = new Set(existing.map((r) => r.id));
+        for (const res of incomingResources) {
+          if (!existingIds.has(res.id)) {
+            merged.push(res);
+          }
+        }
+        finalResources = merged;
+      }
+    }
+
+    this.resources.set(clusterId, finalResources);
 
     // Update counts
-    const nodes = incomingResources.filter((r) => r.kind === 'Node');
-    const pods = incomingResources.filter((r) => r.kind === 'Pod');
+    const nodes = finalResources.filter((r) => r.kind === 'Node');
+    const pods = finalResources.filter((r) => r.kind === 'Pod');
     cluster.nodeCount = nodes.length;
     cluster.podCount = pods.length;
 
@@ -820,6 +899,18 @@ export class DataStore {
               checkCount: (rem.verification?.checkCount || 0) + 1
             };
 
+            if (action) {
+              action.status = 'VERIFIED_RESOLVED';
+              action.verifiedAt = Date.now();
+              action.verificationResult = {
+                success: true,
+                observedState: rem.verification.observedState,
+                evidence: [rem.verification.details || 'Authoritative telemetry verified healthy state'],
+                verifiedAt: Date.now()
+              };
+            }
+            this.recordIncidentSuccess(rem.incidentId);
+
             // Automatically resolve the associated incident with explicit AUTOMATIC_VERIFIED provenance
             const inc = this.incidents.get(rem.incidentId);
             if (inc && (inc.status === 'OPEN' || inc.status === 'IN_PROGRESS' || inc.status === 'ACKNOWLEDGED')) {
@@ -837,17 +928,50 @@ export class DataStore {
                 type: 'RECOVERY',
                 actor: { type: 'AGENT', name: 'SkyOps Verification Engine' },
                 description: `Remediation verified: ${rem.targetResource.kind} ${rem.targetResource.name} container image patched to ${rem.parameters.proposedImage}. Workload is Running & Ready.`,
-                metadata: { resolutionSource: 'AUTOMATIC_VERIFIED', actionId: action.id }
+                metadata: { resolutionSource: 'AUTOMATIC_VERIFIED', actionId: action?.id }
               });
             }
           } else {
-            rem.status = 'VERIFYING';
-            rem.updatedAt = Date.now();
-            rem.verification = {
-              status: 'PENDING',
-              checkCount: (rem.verification?.checkCount || 0) + 1,
-              observedState: `Workload observation pending: container state is currently ${targetContainer?.state || 'waiting'}`
-            };
+            const timeoutSec = action?.verificationPlan?.timeoutSeconds || 300;
+            const isTimedOut = action?.completedAt && Date.now() - action.completedAt > timeoutSec * 1000;
+
+            if (hasPullError || isTimedOut) {
+              rem.status = 'VERIFICATION_FAILED';
+              rem.updatedAt = Date.now();
+              rem.verification = {
+                status: 'VERIFICATION_FAILED',
+                checkCount: (rem.verification?.checkCount || 0) + 1,
+                observedState: `Verification failed: container error detected (${targetContainer?.waiting?.reason || 'Timed out'})`
+              };
+
+              if (action) {
+                action.status = 'VERIFICATION_FAILED';
+                action.verificationResult = {
+                  success: false,
+                  observedState: rem.verification.observedState,
+                  failureReason: targetContainer?.waiting?.reason || 'Telemetry verification timed out',
+                  evidence: [targetContainer?.waiting?.message || 'Container failed to enter Ready/Running state']
+                };
+              }
+              const failures = this.recordIncidentFailure(rem.incidentId);
+              const policy = this.getRemediationPolicy(action?.orgId || '', clusterId);
+              if (failures >= policy.maxAttemptsPerIncident) {
+                this.addTimelineEvent(rem.incidentId, {
+                  type: 'CIRCUIT_BREAKER_TRIPPED',
+                  actor: { type: 'SYSTEM', name: 'SkyOps Circuit Breaker' },
+                  description: `Remediation verification failed ${failures} times. Tripping circuit breaker for incident ${rem.incidentId}.`,
+                  metadata: { failures, maxAttempts: policy.maxAttemptsPerIncident }
+                });
+              }
+            } else {
+              rem.status = 'VERIFYING';
+              rem.updatedAt = Date.now();
+              rem.verification = {
+                status: 'PENDING',
+                checkCount: (rem.verification?.checkCount || 0) + 1,
+                observedState: `Workload observation pending: container state is currently ${targetContainer?.state || 'waiting'}`
+              };
+            }
           }
         } else if (rem.status === 'EXECUTED' || (action && action.status === 'SUCCEEDED')) {
           rem.status = 'VERIFYING';
@@ -895,9 +1019,424 @@ export class DataStore {
     return rem;
   }
 
+  public getRemediationPolicy(orgId: string, clusterId?: string): RemediationPolicy {
+    if (clusterId) {
+      const clusterPolicy = this.policies.get(`cluster:${clusterId}`);
+      if (clusterPolicy) return clusterPolicy;
+    }
+    const orgPolicy = this.policies.get(`org:${orgId}`);
+    if (orgPolicy) return orgPolicy;
+    return RemediationPolicyEngine.getDefaultPolicy(orgId, clusterId);
+  }
+
+  public updateRemediationPolicy(
+    orgId: string,
+    updates: Partial<RemediationPolicy>,
+    clusterId?: string,
+    userActor?: { id: string; name: string }
+  ): RemediationPolicy {
+    const existing = this.getRemediationPolicy(orgId, clusterId);
+    const key = clusterId ? `cluster:${clusterId}` : `org:${orgId}`;
+    const updated: RemediationPolicy = {
+      ...existing,
+      ...updates,
+      orgId,
+      clusterId: clusterId || existing.clusterId,
+      updatedAt: Date.now(),
+      updatedBy: userActor ? { id: userActor.id, name: userActor.name } : existing.updatedBy
+    };
+
+    if (
+      updates.remediationMode &&
+      !['MANUAL_ONLY', 'APPROVAL_REQUIRED', 'CONTROLLED_AUTONOMOUS'].includes(updates.remediationMode)
+    ) {
+      throw new Error(`Invalid remediation mode: ${updates.remediationMode}`);
+    }
+
+    this.policies.set(key, updated);
+    this.saveSnapshot();
+    return updated;
+  }
+
+  public getIncidentFailureCount(incidentId: string): number {
+    return this.incidentFailures.get(incidentId) || 0;
+  }
+
+  public recordIncidentFailure(incidentId: string): number {
+    const current = (this.incidentFailures.get(incidentId) || 0) + 1;
+    this.incidentFailures.set(incidentId, current);
+    this.saveSnapshot();
+    return current;
+  }
+
+  public recordIncidentSuccess(incidentId: string): void {
+    this.incidentFailures.delete(incidentId);
+    this.saveSnapshot();
+  }
+
+  public getRecentClusterActionCount(clusterId: string, windowMs = 3600_000): number {
+    const now = Date.now();
+    const history = this.clusterActionHistory.get(clusterId) || [];
+    const valid = history.filter((t) => now - t <= windowMs);
+    this.clusterActionHistory.set(clusterId, valid);
+    return valid.length;
+  }
+
+  public recordClusterAction(clusterId: string): void {
+    const history = this.clusterActionHistory.get(clusterId) || [];
+    history.push(Date.now());
+    this.clusterActionHistory.set(clusterId, history);
+  }
+
+  public hasActiveTargetRemediation(
+    clusterId: string,
+    kind: string,
+    namespace: string,
+    name: string,
+    container: string,
+    excludeActionId?: string
+  ): boolean {
+    const activeStatuses: RemediationActionStatus[] = [
+      'PENDING',
+      'QUEUED',
+      'DELIVERED',
+      'ACKNOWLEDGED',
+      'EXECUTING',
+      'DISPATCHED',
+      'SUCCEEDED',
+      'EXECUTED',
+      'VERIFYING'
+    ];
+    for (const a of this.remediationActions.values()) {
+      if (excludeActionId && a.id === excludeActionId) continue;
+      if (
+        a.clusterId === clusterId &&
+        a.target.kind.toLowerCase() === kind.toLowerCase() &&
+        (a.target.namespace || 'default').toLowerCase() === (namespace || 'default').toLowerCase() &&
+        a.target.name.toLowerCase() === name.toLowerCase() &&
+        (a.target.container || '').toLowerCase() === (container || '').toLowerCase() &&
+        activeStatuses.includes(a.status)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private createCanonicalRemediationAction(params: {
+    incident: Incident;
+    containerName: string;
+    expectedCurrentValue: string;
+    proposedValue: string;
+    requestedBy: { type: 'AI' | 'USER' | 'SYSTEM' | 'AUTONOMOUS_POLICY'; id?: string; name: string };
+    approver?: { id: string; name: string; email?: string };
+    status?: RemediationActionStatus;
+    riskLevel?: AIRiskLevel;
+    policy: RemediationPolicy;
+  }): RemediationAction {
+    const now = Date.now();
+    const actionId = `act-${crypto.randomBytes(12).toString('hex')}`;
+    const executionId = `exec-${crypto.randomBytes(8).toString('hex')}`;
+    const idempotencyKey = RemediationPolicyEngine.generateIdempotencyKey(
+      params.incident.clusterId,
+      params.incident.namespace,
+      params.incident.resourceKind || 'Pod',
+      params.incident.resourceName,
+      params.containerName,
+      `/spec/containers/${params.containerName}/image`,
+      params.proposedValue
+    );
+
+    const cluster = this.clusters.get(params.incident.clusterId);
+
+    const action: RemediationAction = {
+      id: actionId,
+      incidentId: params.incident.id,
+      orgId: params.incident.orgId,
+      clusterId: params.incident.clusterId,
+      clusterName: cluster?.name || params.incident.clusterName,
+      actionType: 'ReplacePodImage',
+      type: 'ReplacePodImage',
+      target: {
+        kind: 'Pod',
+        namespace: params.incident.namespace,
+        name: params.incident.resourceName,
+        container: params.containerName
+      },
+      fieldPath: `/spec/containers/${params.containerName}/image`,
+      expectedCurrentValue: params.expectedCurrentValue,
+      proposedValue: params.proposedValue,
+      parameters: {
+        containerName: params.containerName,
+        currentImage: params.expectedCurrentValue,
+        proposedImage: params.proposedValue
+      },
+      requestedBy: params.requestedBy,
+      approvingUserId: params.approver?.id,
+      approvingUserName: params.approver?.name,
+      approvedBy: params.approver
+        ? {
+            userId: params.approver.id,
+            name: params.approver.name,
+            email: params.approver.email
+          }
+        : undefined,
+      approvedAt: params.approver ? now : undefined,
+      status: params.status || 'PENDING',
+      createdAt: now,
+      expiresAt: now + (params.policy.actionExpirationMs || 15 * 60 * 1000),
+      executionId,
+      idempotencyKey,
+      verificationPlan: {
+        expectedState: `Pod is Running and container "${params.containerName}" is Ready with image "${params.proposedValue}"`,
+        conditions: [
+          { type: 'Ready', status: 'True', description: 'Container ready probe passes' },
+          { type: 'ContainersReady', status: 'True', description: 'All containers ready' }
+        ],
+        observationWindowSeconds: 30,
+        timeoutSeconds: 300
+      },
+      rollbackPlan: {
+        supported: true,
+        strategy: 'Revert container image specification to previous known value',
+        rollbackValue: params.expectedCurrentValue
+      },
+      riskLevel: params.riskLevel || 'LOW',
+      isExecutable: true,
+      groundingEvidence: params.incident.technicalDetails?.containers
+        ? [
+            {
+              source: 'telemetry',
+              reason: 'observed',
+              message: `Live observed container image is "${params.expectedCurrentValue}"`,
+              timestamp: now
+            }
+          ]
+        : []
+    };
+
+    return action;
+  }
+
+  public evaluateAutonomousRemediation(
+    incident: Incident,
+    rem: StructuredRemediation
+  ): RemediationAction | null {
+    if (rem.status !== 'PROPOSED') return null;
+    const policy = this.getRemediationPolicy(incident.orgId, incident.clusterId);
+    if (policy.remediationMode !== 'CONTROLLED_AUTONOMOUS') {
+      return null;
+    }
+
+    if (rem.isExecutable === false || incident.resourceKind !== 'Pod') {
+      return null;
+    }
+
+    const containerName = rem.parameters.containerName || incident.resourceName;
+    const proposedImage = (rem.parameters.proposedImage || '').trim();
+    const observedContainer = (incident.technicalDetails?.containers || []).find((c) => c.name === containerName);
+    const expectedCurrentValue = observedContainer?.image || rem.parameters.currentImage || '';
+
+    if (!proposedImage || proposedImage === 'unknown' || !expectedCurrentValue || expectedCurrentValue === proposedImage) {
+      return null;
+    }
+
+    const clusterRes = this.resources.get(incident.clusterId) || [];
+    const targetRes = clusterRes.find(
+      (r) =>
+        r.kind.toLowerCase() === 'pod' &&
+        (r.namespace || 'default').toLowerCase() === incident.namespace.toLowerCase() &&
+        r.name.toLowerCase() === incident.resourceName.toLowerCase()
+    );
+
+    const isStandalonePod = !(
+      (targetRes?.ownerReferences && targetRes.ownerReferences.length > 0) ||
+      (Array.isArray((incident.technicalDetails as any)?.ownerReferences) &&
+        (incident.technicalDetails as any).ownerReferences.length > 0)
+    );
+
+    const hasActiveLock = this.hasActiveTargetRemediation(
+      incident.clusterId,
+      'Pod',
+      incident.namespace,
+      incident.resourceName,
+      containerName
+    );
+
+    const recentClusterActions = this.getRecentClusterActionCount(incident.clusterId);
+    const failureCount = this.getIncidentFailureCount(incident.id);
+    const telemetryAgeMs = targetRes ? Date.now() - targetRes.updatedAt : Date.now() - incident.updatedAt;
+
+    const candidateAction = this.createCanonicalRemediationAction({
+      incident,
+      containerName,
+      expectedCurrentValue,
+      proposedValue: proposedImage,
+      requestedBy: { type: 'AUTONOMOUS_POLICY', name: 'SkyOps Autonomous Policy Engine' },
+      riskLevel: rem.reasoning?.risk || 'LOW',
+      policy
+    });
+
+    const evaluation = RemediationPolicyEngine.evaluatePolicy(candidateAction, incident, policy, {
+      recentClusterActionsCount: recentClusterActions,
+      incidentFailureCount: failureCount,
+      hasActiveTargetLock: hasActiveLock,
+      telemetryAgeMs,
+      isStandalonePod
+    });
+
+    if (!evaluation.allowed) {
+      if (evaluation.decision === 'CIRCUIT_BREAKER_TRIPPED') {
+        this.addTimelineEvent(incident.id, {
+          type: 'CIRCUIT_BREAKER_TRIPPED',
+          actor: { type: 'SYSTEM', name: 'SkyOps Circuit Breaker' },
+          description: evaluation.reason
+        });
+      }
+      return null;
+    }
+
+    // Policy approved autonomous dispatch
+    const now = Date.now();
+    candidateAction.status = 'PENDING';
+    candidateAction.approvedAt = now;
+    candidateAction.approvingUserId = 'policy:autonomous';
+    candidateAction.approvingUserName = 'SkyOps Autonomous Engine';
+    candidateAction.approvedBy = {
+      userId: 'policy:autonomous',
+      name: 'SkyOps Autonomous Engine'
+    };
+
+    this.remediationActions.set(candidateAction.id, candidateAction);
+    this.recordClusterAction(incident.clusterId);
+
+    rem.status = 'DISPATCHED';
+    rem.updatedAt = now;
+    rem.approval = {
+      approvedBy: {
+        userId: 'policy:autonomous',
+        name: 'SkyOps Autonomous Policy Engine'
+      },
+      approvedAt: now,
+      comments: `Autonomous dispatch authorized by policy: ${evaluation.reason}`
+    };
+    rem.execution = {
+      dispatchedAt: now,
+      status: 'PENDING',
+      message: `Autonomous ReplacePodImage action dispatched to SkyOps Agent on cluster "${incident.clusterName}".`
+    };
+
+    incident.status = 'IN_PROGRESS';
+    incident.updatedAt = now;
+
+    this.addTimelineEvent(incident.id, {
+      type: 'AUTOMATIC_ACTION',
+      actor: { type: 'SYSTEM', name: 'SkyOps Autonomous Policy Engine' },
+      description: `Autonomous remediation authorized: ${evaluation.reason}`,
+      metadata: {
+        actionId: candidateAction.id,
+        policyMode: policy.remediationMode,
+        proposedImage
+      }
+    });
+
+    this.addTimelineEvent(incident.id, {
+      type: 'REMEDIATION_APPROVED',
+      actor: { type: 'SYSTEM', name: 'SkyOps Autonomous Policy Engine' },
+      description: `Autonomous policy dispatched ReplacePodImage for ${incident.namespace}/${incident.resourceName}:${containerName}`,
+      metadata: { actionId: candidateAction.id, before: expectedCurrentValue, proposed: proposedImage }
+    });
+
+    this.saveSnapshot();
+    return candidateAction;
+  }
+
+  public getRemediationAction(actionId: string): RemediationAction | undefined {
+    return this.remediationActions.get(actionId);
+  }
+
+  public cancelRemediationAction(
+    actionId: string,
+    orgId: string,
+    userActor: { id: string; name: string }
+  ): RemediationAction {
+    const action = this.remediationActions.get(actionId);
+    if (!action) throw new Error('Remediation action not found');
+    const incident = this.incidents.get(action.incidentId);
+    if (!incident || incident.orgId !== orgId) throw new Error('Unauthorized');
+
+    RemediationPolicyEngine.assertValidTransition(action.status, 'CANCELLED', action.id);
+    action.status = 'CANCELLED';
+    const now = Date.now();
+    action.completedAt = now;
+
+    const rem = this.remediations.get(action.incidentId);
+    if (rem && (rem.status === 'DISPATCHED' || rem.status === 'PROPOSED')) {
+      rem.status = 'REJECTED';
+      rem.updatedAt = now;
+    }
+
+    if (incident.status === 'IN_PROGRESS') {
+      incident.status = 'OPEN';
+      incident.updatedAt = now;
+    }
+
+    this.addTimelineEvent(incident.id, {
+      type: 'REMEDIATION_CANCELLED',
+      actor: { type: 'USER', id: userActor.id, name: userActor.name },
+      description: `Remediation action ${action.id} was cancelled by ${userActor.name}`,
+      metadata: { actionId }
+    });
+
+    this.saveSnapshot();
+    return action;
+  }
+
+  public getRemediationAuditTrail(incidentId: string, orgId?: string): {
+    remediation: StructuredRemediation | null;
+    actions: RemediationAction[];
+    policy: RemediationPolicy;
+    timeline: TimelineEvent[];
+    failureCount: number;
+  } {
+    const incident = orgId ? this.getIncident(incidentId, orgId) : this.incidents.get(incidentId);
+    if (!incident) throw new Error('Incident not found');
+
+    const rem = this.remediations.get(incidentId) || null;
+    const actions = [...this.remediationActions.values()].filter((a) => a.incidentId === incidentId);
+    const policy = this.getRemediationPolicy(incident.orgId, incident.clusterId);
+    const timeline = (this.incidentTimeline.get(incidentId) || []).filter(
+      (e) =>
+        e.type.startsWith('REMEDIATION_') ||
+        e.type === 'CIRCUIT_BREAKER_TRIPPED' ||
+        e.type === 'AUTOMATIC_ACTION' ||
+        e.type === 'RECOVERY'
+    );
+    const failureCount = this.getIncidentFailureCount(incidentId);
+
+    return {
+      remediation: rem,
+      actions,
+      policy,
+      timeline,
+      failureCount
+    };
+  }
+
   public saveRemediation(remediation: StructuredRemediation): void {
     this.remediations.set(remediation.incidentId, remediation);
     this.saveSnapshot();
+
+    if (remediation.status === 'PROPOSED') {
+      const incident = this.incidents.get(remediation.incidentId);
+      if (incident) {
+        try {
+          this.evaluateAutonomousRemediation(incident, remediation);
+        } catch (err) {
+          console.warn('[DataStore] Autonomous remediation evaluation notice:', err);
+        }
+      }
+    }
   }
 
   public approveRemediation(
@@ -987,27 +1526,21 @@ export class DataStore {
       rem.changePreview.container = containerName;
     }
 
+    const policy = this.getRemediationPolicy(orgId, incident.clusterId);
+
     // Register canonical RemediationAction for the SkyOps Agent to poll and execute
-    const action: RemediationAction = {
-      id: `act-${crypto.randomBytes(12).toString('hex')}`,
-      incidentId,
-      clusterId: incident.clusterId,
-      type: 'ReplacePodImage',
-      target: {
-        kind: 'Pod',
-        namespace: incident.namespace,
-        name: incident.resourceName,
-        container: containerName
-      },
-      fieldPath: `/spec/containers/${containerName}/image`,
+    const action = this.createCanonicalRemediationAction({
+      incident,
+      containerName,
       expectedCurrentValue,
       proposedValue: effectiveImage,
-      approvingUserId: approver.id,
-      approvingUserName: approver.name,
-      approvedAt: now,
-      status: 'PENDING'
-    };
+      requestedBy: { type: 'USER', id: approver.id, name: approver.name },
+      approver,
+      riskLevel: rem.reasoning?.risk || 'LOW',
+      policy
+    });
     this.remediationActions.set(action.id, action);
+    this.recordClusterAction(incident.clusterId);
 
     rem.status = 'DISPATCHED';
     rem.orgId = orgId;
@@ -1317,6 +1850,7 @@ export class DataStore {
         incidentType: detection.incidentType,
         title: detection.title,
         severity: detection.severity,
+        confidence: (detection.technicalDetails as any)?.confidence || 'HIGH',
         status: 'OPEN',
         occurrenceCount: 1,
         firstSeenAt: Date.now(),
@@ -1560,9 +2094,11 @@ export class DataStore {
     return inc;
   }
 
-  public getIncidentTimeline(incidentId: string, orgId: string): TimelineEvent[] {
-    const inc = this.getIncident(incidentId, orgId);
-    if (!inc) return [];
+  public getIncidentTimeline(incidentId: string, orgId?: string): TimelineEvent[] {
+    if (orgId) {
+      const inc = this.getIncident(incidentId, orgId);
+      if (!inc) return [];
+    }
     return (this.incidentTimeline.get(incidentId) || []).slice().sort((a, b) => a.timestamp - b.timestamp);
   }
 
@@ -1600,21 +2136,18 @@ export class DataStore {
     const observed = (incident.technicalDetails.containers || []).find(c => c.name === approval.container);
     if (!observed || observed.image !== approval.expectedCurrentValue) throw new Error('Expected current image does not match authoritative Agent telemetry');
     const now = Date.now();
-    const action: RemediationAction = {
-      id: `act-${crypto.randomBytes(12).toString('hex')}`,
-      incidentId,
-      clusterId: incident.clusterId,
-      type: 'ReplacePodImage',
-      target: { kind: 'Pod', namespace: incident.namespace, name: incident.resourceName, container: approval.container },
-      fieldPath: `/spec/containers/${approval.container}/image`,
+    const policy = this.getRemediationPolicy(orgId, incident.clusterId);
+    const action = this.createCanonicalRemediationAction({
+      incident,
+      containerName: approval.container,
       expectedCurrentValue: approval.expectedCurrentValue,
       proposedValue: approval.proposedValue,
-      approvingUserId: user.id,
-      approvingUserName: user.name,
-      approvedAt: now,
-      status: 'PENDING'
-    };
+      requestedBy: { type: 'USER', id: user.id, name: user.name },
+      approver: { id: user.id, name: user.name },
+      policy
+    });
     this.remediationActions.set(action.id, action);
+    this.recordClusterAction(incident.clusterId);
     incident.status = 'IN_PROGRESS';
     incident.updatedAt = now;
 
@@ -1650,14 +2183,37 @@ export class DataStore {
   public claimPendingRemediationActions(clusterId: string): RemediationAction[] {
     const CLAIM_RETRY_TIMEOUT_MS = 2 * 60 * 1000;
     const now = Date.now();
+
+    // Check for expired actions
+    for (const action of this.remediationActions.values()) {
+      if (
+        action.clusterId === clusterId &&
+        (action.status === 'PENDING' || action.status === 'QUEUED') &&
+        action.expiresAt &&
+        now > action.expiresAt
+      ) {
+        action.status = 'EXPIRED';
+        this.addTimelineEvent(action.incidentId, {
+          type: 'REMEDIATION_EXPIRED',
+          actor: { type: 'SYSTEM', name: 'SkyOps Safety Engine' },
+          description: `Remediation action ${action.id} expired before delivery to agent`,
+          metadata: { actionId: action.id }
+        });
+      }
+    }
+
     const actions = [...this.remediationActions.values()].filter(
       (a) =>
         a.clusterId === clusterId &&
-        (a.status === 'PENDING' || (a.status === 'DELIVERED' && (!a.deliveredAt || now - a.deliveredAt > CLAIM_RETRY_TIMEOUT_MS)))
+        (a.status === 'PENDING' ||
+          a.status === 'QUEUED' ||
+          (a.status === 'DELIVERED' && (!a.deliveredAt || now - a.deliveredAt > CLAIM_RETRY_TIMEOUT_MS)))
     );
+
     for (const action of actions) {
       action.status = 'DELIVERED';
       action.deliveredAt = now;
+      action.leaseExpiresAt = now + CLAIM_RETRY_TIMEOUT_MS;
     }
     if (actions.length) this.saveSnapshot();
     return actions;
@@ -1672,11 +2228,11 @@ export class DataStore {
     if (!action || action.clusterId !== clusterId) return null;
 
     // Idempotent reporting: if already reported, return existing action
-    if (action.status === 'SUCCEEDED' || action.status === 'FAILED') {
+    if (action.status === 'SUCCEEDED' || action.status === 'FAILED' || action.status === 'VERIFIED_RESOLVED') {
       return action;
     }
 
-    if (action.status !== 'DELIVERED' && action.status !== 'PENDING') {
+    if (action.status !== 'DELIVERED' && action.status !== 'PENDING' && action.status !== 'QUEUED') {
       return null;
     }
 
@@ -1684,6 +2240,19 @@ export class DataStore {
     action.status = result.success ? 'SUCCEEDED' : 'FAILED';
     action.completedAt = now;
     action.executionResult = result;
+
+    if (!result.success) {
+      const failures = this.recordIncidentFailure(action.incidentId);
+      const policy = this.getRemediationPolicy(action.orgId, action.clusterId);
+      if (failures >= policy.maxAttemptsPerIncident) {
+        this.addTimelineEvent(action.incidentId, {
+          type: 'CIRCUIT_BREAKER_TRIPPED',
+          actor: { type: 'SYSTEM', name: 'SkyOps Circuit Breaker' },
+          description: `Remediation failed ${failures} times. Tripping circuit breaker for incident ${action.incidentId}. Further autonomous remediations blocked.`,
+          metadata: { failures, maxAttempts: policy.maxAttemptsPerIncident, actionId }
+        });
+      }
+    }
 
     const incident = this.incidents.get(action.incidentId);
     if (incident) {
@@ -2224,6 +2793,40 @@ export class DataStore {
     }
 
     return { success: false, message: 'Unknown scenario' };
+  }
+
+  public getOrgUsage(orgId: string): OrgUsageSummary {
+    const orgClusters = Array.from(this.clusters.values()).filter((c) => c.orgId === orgId);
+    let totalNodes = 0;
+    let totalWorkloads = 0;
+    for (const c of orgClusters) {
+      totalNodes += c.nodeCount || 0;
+      totalWorkloads += c.podCount || 0;
+    }
+    const orgIncidents = Array.from(this.incidents.values()).filter((i) => i.orgId === orgId);
+    const resolvedCount = orgIncidents.filter((i) => i.status === 'RESOLVED').length;
+    const actions = Array.from(this.remediationActions.values()).filter((a) => a.orgId === orgId);
+
+    const period = new Date().toISOString().substring(0, 7);
+
+    return {
+      orgId,
+      period,
+      totalClusters: orgClusters.length,
+      totalNodes,
+      totalWorkloads,
+      telemetryBatchesIngested: this.telemetryBatchCounts.get(orgId) || 0,
+      telemetryResourcesIngested: this.telemetryResourceCounts.get(orgId) || 0,
+      incidentsDetected: orgIncidents.length,
+      incidentsResolved: resolvedCount,
+      remediationsExecuted: actions.length,
+      aiAnalysesPerformed: Array.from(this.aiAnalyses.values()).filter((a) => {
+        const inc = this.incidents.get(a.incidentId);
+        return inc?.orgId === orgId;
+      }).length,
+      auditEventsRecorded: auditService.getCount(orgId),
+      lastUpdated: Date.now()
+    };
   }
 }
 

@@ -11,6 +11,7 @@ import { IncidentDetailView } from '../incidents/IncidentDetailView';
 import { IncidentsView } from '../incidents/IncidentsView';
 import { OverviewView } from '../overview/OverviewView';
 import { SettingsView } from '../settings/SettingsView';
+import { AuditView } from '../audit/AuditView';
 import { NavigationTab, Sidebar } from './Sidebar';
 
 interface AppShellProps {
@@ -278,6 +279,10 @@ export const AppShell: React.FC<AppShellProps> = ({
                 />
               )}
             </>
+          )}
+
+          {activeTab === 'audit' && (
+            <AuditView />
           )}
 
           {activeTab === 'settings' && (

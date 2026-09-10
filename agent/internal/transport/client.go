@@ -98,6 +98,10 @@ type RemediationAction struct {
 	FieldPath            string                                            `json:"fieldPath"`
 	ExpectedCurrentValue string                                            `json:"expectedCurrentValue"`
 	ProposedValue        string                                            `json:"proposedValue"`
+	ExecutionID          string                                            `json:"executionId,omitempty"`
+	IdempotencyKey       string                                            `json:"idempotencyKey,omitempty"`
+	ExpiresAt            int64                                             `json:"expiresAt,omitempty"`
+	ClusterID            string                                            `json:"clusterId,omitempty"`
 }
 
 // SendHeartbeat sends a periodic heartbeat with exponential retry backoff

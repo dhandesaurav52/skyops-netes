@@ -209,6 +209,92 @@ export function requireRole(allowedRoles: Role[]) {
   };
 }
 
+export type Permission =
+  | 'cluster.read'
+  | 'cluster.manage'
+  | 'incident.read'
+  | 'incident.manage'
+  | 'remediation.view'
+  | 'remediation.approve'
+  | 'remediation.execute'
+  | 'policy.manage'
+  | 'team.manage'
+  | 'audit.read'
+  | 'billing.read'
+  | 'integration.manage';
+
+export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
+  OWNER: [
+    'cluster.read',
+    'cluster.manage',
+    'incident.read',
+    'incident.manage',
+    'remediation.view',
+    'remediation.approve',
+    'remediation.execute',
+    'policy.manage',
+    'team.manage',
+    'audit.read',
+    'billing.read',
+    'integration.manage'
+  ],
+  ADMIN: [
+    'cluster.read',
+    'cluster.manage',
+    'incident.read',
+    'incident.manage',
+    'remediation.view',
+    'remediation.approve',
+    'remediation.execute',
+    'policy.manage',
+    'team.manage',
+    'audit.read',
+    'billing.read',
+    'integration.manage'
+  ],
+  ENGINEER: [
+    'cluster.read',
+    'incident.read',
+    'incident.manage',
+    'remediation.view',
+    'remediation.approve',
+    'remediation.execute',
+    'audit.read'
+  ],
+  VIEWER: [
+    'cluster.read',
+    'incident.read',
+    'remediation.view',
+    'audit.read'
+  ]
+};
+
+export function hasPermission(role: Role, permission: Permission): boolean {
+  const permissions = ROLE_PERMISSIONS[role] || [];
+  return permissions.includes(permission);
+}
+
+/**
+ * Middleware: Require Fine-Grained Enterprise Permission(s)
+ */
+export function requirePermission(required: Permission | Permission[]) {
+  const requiredList = Array.isArray(required) ? required : [required];
+  return (req: AuthenticatedUserRequest, res: Response, next: NextFunction): void | Response => {
+    if (!req.userRole) {
+      return res.status(403).json({ error: 'Forbidden: No active organization role resolved' });
+    }
+
+    const hasAll = requiredList.every((perm) => hasPermission(req.userRole!, perm));
+    if (!hasAll) {
+      return res.status(403).json({
+        error: `Forbidden: Missing required permission(s): [${requiredList.join(', ')}]. Role '${req.userRole}' does not hold this authorization.`
+      });
+    }
+
+    next();
+  };
+}
+
 /**
  * Middleware: Require Valid Kubernetes Agent Authentication
  */
@@ -231,6 +317,22 @@ export function requireAgentAuth(
     return res.status(403).json({
       error: 'Forbidden: Invalid, revoked, or unassociated Kubernetes Agent token'
     });
+  }
+
+  // Agent version compatibility verification
+  const agentVersion = (req.headers['x-skyops-agent-version'] as string) || (req.body?.agentVersion as string) || '1.0.0';
+  const major = parseInt(agentVersion.split('.')[0], 10) || 1;
+  const minor = parseInt(agentVersion.split('.')[1], 10) || 0;
+
+  if (major < 1) {
+    res.setHeader('X-SkyOps-Agent-Compatibility', 'UNSUPPORTED');
+    return res.status(426).json({
+      error: `Upgrade Required: SkyOps Agent v${agentVersion} is deprecated. Minimum required version is v1.0.0.`
+    });
+  } else if (major === 1 && minor < 2) {
+    res.setHeader('X-SkyOps-Agent-Compatibility', 'UPDATE_RECOMMENDED');
+  } else {
+    res.setHeader('X-SkyOps-Agent-Compatibility', 'SUPPORTED');
   }
 
   req.clusterId = verified.clusterId;

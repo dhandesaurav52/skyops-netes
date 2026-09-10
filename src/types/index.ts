@@ -120,6 +120,7 @@ export interface ContainerDiagnostic {
   waitingReason?: string;
   waitingMessage?: string;
   terminationReason?: string;
+  terminationMessage?: string;
   exitCode?: number;
   signal?: number;
   imageId?: string;
@@ -212,25 +213,132 @@ export interface Incident {
     reason?: string;
     verificationDetails?: string;
   };
+  confidence?: 'LOW' | 'MEDIUM' | 'HIGH';
+  summary?: string;
+  rootCauseAnalysis?: string;
 }
 
-/** A human-approved, deterministic mutation which an Agent may execute. */
+export type RemediationActionStatus =
+  | 'PROPOSED'
+  | 'AWAITING_APPROVAL'
+  | 'APPROVED'
+  | 'QUEUED'
+  | 'DELIVERED'
+  | 'ACKNOWLEDGED'
+  | 'EXECUTING'
+  | 'EXECUTED'
+  | 'VERIFYING'
+  | 'VERIFIED'
+  | 'VERIFIED_RESOLVED'
+  | 'REJECTED'
+  | 'EXPIRED'
+  | 'DELIVERY_FAILED'
+  | 'EXECUTION_FAILED'
+  | 'VERIFICATION_FAILED'
+  | 'CANCELLED'
+  | 'STALE'
+  | 'PENDING'
+  | 'DISPATCHED'
+  | 'SUCCEEDED'
+  | 'FAILED';
+
+export type RemediationMode = 'MANUAL_ONLY' | 'APPROVAL_REQUIRED' | 'CONTROLLED_AUTONOMOUS';
+
+export interface RemediationPolicy {
+  orgId: string;
+  clusterId?: string;
+  remediationMode: RemediationMode;
+  allowedActionTypes: string[];
+  allowedNamespaces?: string[];
+  maxRiskLevel: AIRiskLevel;
+  requireHighConfidence: boolean;
+  minConfidenceThreshold: number;
+  maxAttemptsPerIncident: number;
+  maxActionsPerHourPerCluster: number;
+  telemetryFreshnessThresholdMs: number;
+  actionExpirationMs: number;
+  leaseTimeoutMs: number;
+  updatedAt: number;
+  updatedBy?: { id: string; name: string };
+}
+
+/** Canonical Remediation Action Model */
 export interface RemediationAction {
   id: string;
   incidentId: string;
+  orgId: string;
   clusterId: string;
+  clusterName?: string;
+  actionType: 'ReplacePodImage' | AIRemediationActionType;
   type: 'ReplacePodImage';
-  target: { kind: 'Pod'; namespace: string; name: string; container: string };
+  target: { kind: 'Pod' | string; namespace: string; name: string; container: string };
   fieldPath: string;
   expectedCurrentValue: string;
   proposedValue: string;
-  approvingUserId: string;
-  approvingUserName: string;
-  approvedAt: number;
-  status: 'PENDING' | 'DELIVERED' | 'SUCCEEDED' | 'FAILED';
+  parameters?: {
+    containerName: string;
+    currentImage: string;
+    proposedImage: string;
+    [key: string]: unknown;
+  };
+  groundingEvidence?: Array<{
+    source: string;
+    reason: string;
+    message: string;
+    timestamp?: number;
+  }>;
+  requestedBy?: {
+    type: 'AI' | 'USER' | 'SYSTEM' | 'AUTONOMOUS_POLICY';
+    id?: string;
+    name: string;
+  };
+  approvingUserId?: string;
+  approvingUserName?: string;
+  approvedBy?: {
+    userId: string;
+    name: string;
+    email?: string;
+  };
+  approvedAt?: number;
+  status: RemediationActionStatus;
+  createdAt: number;
+  expiresAt: number;
+  executionId: string;
+  idempotencyKey: string;
+  verificationPlan: {
+    expectedState: string;
+    conditions?: Array<{ type: string; status: string; description?: string }>;
+    observationWindowSeconds: number;
+    timeoutSeconds: number;
+  };
+  rollbackPlan: {
+    supported: boolean;
+    strategy: string;
+    rollbackValue?: string;
+  };
+  riskLevel: AIRiskLevel;
+  isExecutable: boolean;
+  unexecutableReason?: string;
   deliveredAt?: number;
+  leaseExpiresAt?: number;
+  acknowledgedAt?: number;
+  executingAt?: number;
   completedAt?: number;
-  executionResult?: { success: boolean; message: string };
+  verifiedAt?: number;
+  executionResult?: {
+    success: boolean;
+    message: string;
+    errorCategory?: 'TARGET_NOT_FOUND' | 'PRECONDITION_FAILED' | 'CONTROLLER_OWNED' | 'INVALID_FIELD' | 'K8S_API_ERROR' | 'UNKNOWN';
+    details?: string;
+    executionId?: string;
+  };
+  verificationResult?: {
+    success: boolean;
+    observedState: string;
+    evidence?: string[];
+    verifiedAt?: number;
+    failureReason?: string;
+  };
 }
 
 export type TimelineEventType =
@@ -242,8 +350,20 @@ export type TimelineEventType =
   | 'NOTE_ADDED'
   | 'RECOVERY'
   | 'MANUAL_UPDATE'
+  | 'REMEDIATION_PROPOSED'
   | 'REMEDIATION_APPROVED'
-  | 'REMEDIATION_EXECUTED';
+  | 'REMEDIATION_QUEUED'
+  | 'REMEDIATION_LEASED'
+  | 'REMEDIATION_EXECUTING'
+  | 'REMEDIATION_EXECUTED'
+  | 'REMEDIATION_FAILED'
+  | 'REMEDIATION_VERIFYING'
+  | 'REMEDIATION_VERIFIED'
+  | 'REMEDIATION_VERIFICATION_FAILED'
+  | 'REMEDIATION_CANCELLED'
+  | 'REMEDIATION_EXPIRED'
+  | 'CIRCUIT_BREAKER_TRIPPED'
+  | 'AUTOMATIC_ACTION';
 
 export interface TimelineEvent {
   id: string;
@@ -301,6 +421,7 @@ export interface KubernetesResource {
   apiVersion?: string;
   nodeName?: string;
   labels?: Record<string, string>;
+  annotations?: Record<string, string>;
   ownerReferences?: Array<{ uid?: string; kind?: string; name?: string; controller?: boolean }>;
   metrics?: ResourceMetrics;
   observedAt?: number;
@@ -479,7 +600,8 @@ export type AIRemediationActionType =
   | 'SCALE_REPLICAS'
   | 'CONFIG_REVISION'
   | 'MANUAL_INSPECTION'
-  | 'UNSPECIFIED';
+  | 'UNSPECIFIED'
+  | 'ReplacePodImage';
 
 export type RemediationStatus =
   | 'PROPOSED'
@@ -608,6 +730,8 @@ export interface StructuredRemediation {
     saferAlternative?: string;
     confidence: number;
     confidenceExplanation?: string;
+    explanation?: string;
+    rollbackPlan?: string;
   };
   approval?: RemediationApproval;
   execution?: RemediationExecution;

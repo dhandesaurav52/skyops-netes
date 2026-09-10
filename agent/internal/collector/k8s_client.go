@@ -73,11 +73,26 @@ func NewInClusterK8sClient() (*InClusterK8sClient, error) {
 	}, nil
 }
 
+// NewCustomK8sClient creates a client with custom HTTP client, baseURL, and token (useful for testing or custom configs)
+func NewCustomK8sClient(httpClient *http.Client, baseURL, token string) *InClusterK8sClient {
+	return &InClusterK8sClient{
+		httpClient: httpClient,
+		apiBaseURL: strings.TrimRight(baseURL, "/"),
+		token:      strings.TrimSpace(token),
+	}
+}
+
 func (k *InClusterK8sClient) GetJSON(ctx context.Context, apiPath string, target interface{}) error {
+	_, err := k.GetJSONWithStatus(ctx, apiPath, target)
+	return err
+}
+
+// GetJSONWithStatus executes a GET request and returns the HTTP status code and any error encountered
+func (k *InClusterK8sClient) GetJSONWithStatus(ctx context.Context, apiPath string, target interface{}) (int, error) {
 	url := fmt.Sprintf("%s%s", k.apiBaseURL, apiPath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+k.token)
@@ -85,16 +100,22 @@ func (k *InClusterK8sClient) GetJSON(ctx context.Context, apiPath string, target
 
 	resp, err := k.httpClient.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("kubernetes API GET %s returned HTTP %d: %s", apiPath, resp.StatusCode, string(body))
+		return resp.StatusCode, fmt.Errorf("kubernetes API GET %s returned HTTP %d: %s", apiPath, resp.StatusCode, string(body))
 	}
 
-	return json.NewDecoder(resp.Body).Decode(target)
+	if target != nil {
+		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+			return resp.StatusCode, err
+		}
+	}
+
+	return http.StatusOK, nil
 }
 
 // K8sVersionInfo represents the response from /version
@@ -182,6 +203,13 @@ type K8sObjectMeta struct {
 	CreationTimestamp string            `json:"creationTimestamp"`
 	Labels            map[string]string `json:"labels"`
 	Annotations       map[string]string `json:"annotations"`
+	OwnerReferences   []struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Name       string `json:"name"`
+		UID        string `json:"uid"`
+		Controller *bool  `json:"controller"`
+	} `json:"ownerReferences"`
 }
 
 type K8sNodeList struct {
@@ -192,6 +220,11 @@ type K8sNode struct {
 	Metadata K8sObjectMeta `json:"metadata"`
 	Spec     struct {
 		PodCIDR string `json:"podCIDR"`
+		Taints  []struct {
+			Key    string `json:"key"`
+			Value  string `json:"value"`
+			Effect string `json:"effect"`
+		} `json:"taints"`
 	} `json:"spec"`
 	Status struct {
 		Capacity    map[string]string `json:"capacity"`
@@ -212,6 +245,37 @@ type K8sNode struct {
 	} `json:"status"`
 }
 
+type K8sProbe struct {
+	HTTPGet *struct {
+		Path   string      `json:"path"`
+		Port   interface{} `json:"port"`
+		Scheme string      `json:"scheme"`
+	} `json:"httpGet"`
+	TCPSocket *struct {
+		Port interface{} `json:"port"`
+	} `json:"tcpSocket"`
+	Exec *struct {
+		Command []string `json:"command"`
+	} `json:"exec"`
+	GRPC *struct {
+		Port    int32   `json:"port"`
+		Service *string `json:"service"`
+	} `json:"grpc"`
+	InitialDelaySeconds int32 `json:"initialDelaySeconds"`
+	TimeoutSeconds      int32 `json:"timeoutSeconds"`
+	PeriodSeconds       int32 `json:"periodSeconds"`
+	SuccessThreshold    int32 `json:"successThreshold"`
+	FailureThreshold    int32 `json:"failureThreshold"`
+}
+
+type K8sToleration struct {
+	Key               string `json:"key"`
+	Operator          string `json:"operator"`
+	Value             string `json:"value"`
+	Effect            string `json:"effect"`
+	TolerationSeconds *int64 `json:"tolerationSeconds"`
+}
+
 type K8sPodList struct {
 	Items []K8sPod `json:"items"`
 }
@@ -219,22 +283,33 @@ type K8sPodList struct {
 type K8sPod struct {
 	Metadata K8sObjectMeta `json:"metadata"`
 	Spec     struct {
-		NodeName   string `json:"nodeName"`
-		Containers []struct {
-			Name      string `json:"name"`
-			Image     string `json:"image"`
-			Resources struct {
+		NodeName           string            `json:"nodeName"`
+		NodeSelector       map[string]string `json:"nodeSelector"`
+		Tolerations        []K8sToleration   `json:"tolerations"`
+		Affinity           interface{}       `json:"affinity"`
+		PriorityClassName  string            `json:"priorityClassName"`
+		RestartPolicy      string            `json:"restartPolicy"`
+		ServiceAccountName string            `json:"serviceAccountName"`
+		Containers         []struct {
+			Name           string    `json:"name"`
+			Image          string    `json:"image"`
+			LivenessProbe  *K8sProbe `json:"livenessProbe"`
+			ReadinessProbe *K8sProbe `json:"readinessProbe"`
+			StartupProbe   *K8sProbe `json:"startupProbe"`
+			Resources      struct {
 				Requests map[string]string `json:"requests"`
 				Limits   map[string]string `json:"limits"`
 			} `json:"resources"`
 		} `json:"containers"`
 	} `json:"spec"`
 	Status struct {
-		Phase      string `json:"phase"`
-		PodIP      string `json:"podIP"`
-		HostIP     string `json:"hostIP"`
-		StartTime  string `json:"startTime"`
-		Conditions []struct {
+		Phase             string `json:"phase"`
+		PodIP             string `json:"podIP"`
+		HostIP            string `json:"hostIP"`
+		StartTime         string `json:"startTime"`
+		QOSClass          string `json:"qosClass"`
+		NominatedNodeName string `json:"nominatedNodeName"`
+		Conditions        []struct {
 			Type               string `json:"type"`
 			Status             string `json:"status"`
 			Reason             string `json:"reason"`
@@ -366,6 +441,339 @@ type K8sEvent struct {
 	FirstTimestamp string `json:"firstTimestamp"`
 	LastTimestamp  string `json:"lastTimestamp"`
 	EventTime      string `json:"eventTime"`
+}
+
+// Networking: Services, Ingresses, Endpoints
+type K8sServiceList struct {
+	Items []K8sService `json:"items"`
+}
+
+type K8sService struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		Type                  string            `json:"type"`
+		ClusterIP             string            `json:"clusterIP"`
+		ClusterIPs            []string          `json:"clusterIPs"`
+		Selector              map[string]string `json:"selector"`
+		SessionAffinity       string            `json:"sessionAffinity"`
+		ExternalTrafficPolicy string            `json:"externalTrafficPolicy"`
+		Ports                 []struct {
+			Name        string      `json:"name"`
+			Protocol    string      `json:"protocol"`
+			Port        int32       `json:"port"`
+			TargetPort  interface{} `json:"targetPort"`
+			NodePort    int32       `json:"nodePort"`
+			AppProtocol *string     `json:"appProtocol"`
+		} `json:"ports"`
+	} `json:"spec"`
+	Status struct {
+		LoadBalancer struct {
+			Ingress []struct {
+				IP       string `json:"ip"`
+				Hostname string `json:"hostname"`
+			} `json:"ingress"`
+		} `json:"loadBalancer"`
+	} `json:"status"`
+}
+
+type K8sIngressList struct {
+	Items []K8sIngress `json:"items"`
+}
+
+type K8sIngress struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		IngressClassName *string `json:"ingressClassName"`
+		Rules            []struct {
+			Host string `json:"host"`
+			HTTP *struct {
+				Paths []struct {
+					Path     string `json:"path"`
+					PathType string `json:"pathType"`
+					Backend  struct {
+						Service *struct {
+							Name string `json:"name"`
+							Port struct {
+								Number int32  `json:"number"`
+								Name   string `json:"name"`
+							} `json:"port"`
+						} `json:"service"`
+					} `json:"backend"`
+				} `json:"paths"`
+			} `json:"http"`
+		} `json:"rules"`
+		TLS []struct {
+			Hosts      []string `json:"hosts"`
+			SecretName string   `json:"secretName"`
+		} `json:"tls"`
+	} `json:"spec"`
+	Status struct {
+		LoadBalancer struct {
+			Ingress []struct {
+				IP       string `json:"ip"`
+				Hostname string `json:"hostname"`
+			} `json:"ingress"`
+		} `json:"loadBalancer"`
+	} `json:"status"`
+}
+
+type K8sEndpointsList struct {
+	Items []K8sEndpoints `json:"items"`
+}
+
+type K8sEndpoints struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Subsets  []struct {
+		Addresses []struct {
+			IP        string `json:"ip"`
+			Hostname  string `json:"hostname"`
+			NodeName  string `json:"nodeName"`
+			TargetRef *struct {
+				Kind      string `json:"kind"`
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"targetRef"`
+		} `json:"addresses"`
+		NotReadyAddresses []struct {
+			IP        string `json:"ip"`
+			Hostname  string `json:"hostname"`
+			NodeName  string `json:"nodeName"`
+			TargetRef *struct {
+				Kind      string `json:"kind"`
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"targetRef"`
+		} `json:"notReadyAddresses"`
+		Ports []struct {
+			Name     string `json:"name"`
+			Port     int32  `json:"port"`
+			Protocol string `json:"protocol"`
+		} `json:"ports"`
+	} `json:"subsets"`
+}
+
+// Storage: PersistentVolumes, StorageClasses
+type K8sPersistentVolumeList struct {
+	Items []K8sPersistentVolume `json:"items"`
+}
+
+type K8sPersistentVolume struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		Capacity                      map[string]string `json:"capacity"`
+		AccessModes                   []string          `json:"accessModes"`
+		PersistentVolumeReclaimPolicy string            `json:"persistentVolumeReclaimPolicy"`
+		StorageClassName              string            `json:"storageClassName"`
+		VolumeMode                    string            `json:"volumeMode"`
+		ClaimRef                      *struct {
+			Kind      string `json:"kind"`
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
+			UID       string `json:"uid"`
+		} `json:"claimRef"`
+	} `json:"spec"`
+	Status struct {
+		Phase   string `json:"phase"`
+		Message string `json:"message"`
+		Reason  string `json:"reason"`
+	} `json:"status"`
+}
+
+type K8sStorageClassList struct {
+	Items []K8sStorageClass `json:"items"`
+}
+
+type K8sStorageClass struct {
+	Metadata             K8sObjectMeta     `json:"metadata"`
+	Provisioner          string            `json:"provisioner"`
+	ReclaimPolicy        *string           `json:"reclaimPolicy"`
+	VolumeBindingMode    *string           `json:"volumeBindingMode"`
+	AllowVolumeExpansion *bool             `json:"allowVolumeExpansion"`
+	Parameters           map[string]string `json:"parameters"`
+}
+
+// Config & Secrets Metadata (values strictly excluded!)
+type K8sConfigMapList struct {
+	Items []K8sConfigMap `json:"items"`
+}
+
+type K8sConfigMap struct {
+	Metadata   K8sObjectMeta          `json:"metadata"`
+	Data       map[string]interface{} `json:"data"`       // Used ONLY to extract key names, never data values
+	BinaryData map[string]interface{} `json:"binaryData"` // Used ONLY to extract key names
+	Immutable  *bool                  `json:"immutable"`
+}
+
+type K8sSecretList struct {
+	Items []K8sSecret `json:"items"`
+}
+
+type K8sSecret struct {
+	Metadata   K8sObjectMeta          `json:"metadata"`
+	Type       string                 `json:"type"`
+	Data       map[string]interface{} `json:"data"`       // Used ONLY to count keys, values are NEVER stored or inspected
+	StringData map[string]interface{} `json:"stringData"` // Used ONLY to count keys
+	Immutable  *bool                  `json:"immutable"`
+}
+
+// Workloads / Batch: Jobs, CronJobs, ReplicaSets
+type K8sJobList struct {
+	Items []K8sJob `json:"items"`
+}
+
+type K8sJob struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		Parallelism           *int32 `json:"parallelism"`
+		Completions           *int32 `json:"completions"`
+		ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds"`
+		BackoffLimit          *int32 `json:"backoffLimit"`
+	} `json:"spec"`
+	Status struct {
+		Conditions []struct {
+			Type               string `json:"type"`
+			Status             string `json:"status"`
+			Reason             string `json:"reason"`
+			Message            string `json:"message"`
+			LastTransitionTime string `json:"lastTransitionTime"`
+		} `json:"conditions"`
+		StartTime      string `json:"startTime"`
+		CompletionTime string `json:"completionTime"`
+		Active         int32  `json:"active"`
+		Succeeded      int32  `json:"succeeded"`
+		Failed         int32  `json:"failed"`
+	} `json:"status"`
+}
+
+type K8sCronJobList struct {
+	Items []K8sCronJob `json:"items"`
+}
+
+type K8sCronJob struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		Schedule                   string `json:"schedule"`
+		Suspend                    *bool  `json:"suspend"`
+		ConcurrencyPolicy          string `json:"concurrencyPolicy"`
+		SuccessfulJobsHistoryLimit *int32 `json:"successfulJobsHistoryLimit"`
+		FailedJobsHistoryLimit     *int32 `json:"failedJobsHistoryLimit"`
+	} `json:"spec"`
+	Status struct {
+		Active             []struct{ Name, Namespace string } `json:"active"`
+		LastScheduleTime   string                             `json:"lastScheduleTime"`
+		LastSuccessfulTime string                             `json:"lastSuccessfulTime"`
+	} `json:"status"`
+}
+
+type K8sReplicaSetList struct {
+	Items []K8sReplicaSet `json:"items"`
+}
+
+type K8sReplicaSet struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		Replicas *int32 `json:"replicas"`
+	} `json:"spec"`
+	Status struct {
+		Replicas             int32 `json:"replicas"`
+		FullyLabeledReplicas int32 `json:"fullyLabeledReplicas"`
+		ReadyReplicas        int32 `json:"readyReplicas"`
+		AvailableReplicas    int32 `json:"availableReplicas"`
+	} `json:"status"`
+}
+
+// Cluster-level governance: Namespaces, ResourceQuotas, LimitRanges
+type K8sNamespaceList struct {
+	Items []K8sNamespace `json:"items"`
+}
+
+type K8sNamespace struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Status   struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+type K8sResourceQuotaList struct {
+	Items []K8sResourceQuota `json:"items"`
+}
+
+type K8sResourceQuota struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		Hard map[string]string `json:"hard"`
+	} `json:"spec"`
+	Status struct {
+		Hard map[string]string `json:"hard"`
+		Used map[string]string `json:"used"`
+	} `json:"status"`
+}
+
+type K8sLimitRangeList struct {
+	Items []K8sLimitRange `json:"items"`
+}
+
+type K8sLimitRange struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	Spec     struct {
+		Limits []struct {
+			Type           string            `json:"type"`
+			Max            map[string]string `json:"max"`
+			Min            map[string]string `json:"min"`
+			Default        map[string]string `json:"default"`
+			DefaultRequest map[string]string `json:"defaultRequest"`
+		} `json:"limits"`
+	} `json:"spec"`
+}
+
+// RBAC: ServiceAccount, RoleBinding, ClusterRoleBinding
+type K8sServiceAccountList struct {
+	Items []K8sServiceAccount `json:"items"`
+}
+
+type K8sServiceAccount struct {
+	Metadata                     K8sObjectMeta           `json:"metadata"`
+	Secrets                      []struct{ Name string } `json:"secrets"`
+	ImagePullSecrets             []struct{ Name string } `json:"imagePullSecrets"`
+	AutomountServiceAccountToken *bool                   `json:"automountServiceAccountToken"`
+}
+
+type K8sRoleBindingList struct {
+	Items []K8sRoleBinding `json:"items"`
+}
+
+type K8sRoleBinding struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	RoleRef  struct {
+		APIGroup string `json:"apiGroup"`
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+	} `json:"roleRef"`
+	Subjects []struct {
+		Kind      string `json:"kind"`
+		APIGroup  string `json:"apiGroup"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"subjects"`
+}
+
+type K8sClusterRoleBindingList struct {
+	Items []K8sClusterRoleBinding `json:"items"`
+}
+
+type K8sClusterRoleBinding struct {
+	Metadata K8sObjectMeta `json:"metadata"`
+	RoleRef  struct {
+		APIGroup string `json:"apiGroup"`
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+	} `json:"roleRef"`
+	Subjects []struct {
+		Kind      string `json:"kind"`
+		APIGroup  string `json:"apiGroup"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"subjects"`
 }
 
 // PatchStrategicMerge sends a strategic merge patch to the Kubernetes API

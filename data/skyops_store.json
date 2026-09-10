@@ -414,5 +414,7 @@
   "remediationActions": {},
   "remediations": {},
   "aiAnalyses": {},
+  "policies": {},
+  "incidentFailures": {},
   "incidentCounter": 1001
 }
