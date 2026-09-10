@@ -729,15 +729,39 @@ export class DataStore {
     this.clusterMetrics.set(clusterId, clusterObservability);
 
     const history = this.clusterMetricHistory.get(clusterId) || [];
+    const cpuReqPct = clusterObservability.commitmentRatios?.cpuRequestedPercent ??
+      (clusterObservability.cpu.allocatable.value > 0
+        ? Math.round((clusterObservability.cpu.request.value / clusterObservability.cpu.allocatable.value) * 100)
+        : 0);
+    const cpuLimPct = clusterObservability.commitmentRatios?.cpuLimitPercent ??
+      (clusterObservability.cpu.allocatable.value > 0
+        ? Math.round((clusterObservability.cpu.limit.value / clusterObservability.cpu.allocatable.value) * 100)
+        : 0);
+    const memReqPct = clusterObservability.commitmentRatios?.memoryRequestedPercent ??
+      (clusterObservability.memory.allocatable.value > 0
+        ? Math.round((clusterObservability.memory.request.value / clusterObservability.memory.allocatable.value) * 100)
+        : 0);
+    const memLimPct = clusterObservability.commitmentRatios?.memoryLimitPercent ??
+      (clusterObservability.memory.allocatable.value > 0
+        ? Math.round((clusterObservability.memory.limit.value / clusterObservability.memory.allocatable.value) * 100)
+        : 0);
+
     const newPoint: MetricHistoryPoint = {
       timestamp: clusterObservability.observedAt,
       cpuUsageMillicores: clusterObservability.cpu.usage?.value,
       cpuRequestMillicores: clusterObservability.cpu.request.value,
       cpuCapacityMillicores: clusterObservability.cpu.capacity.value,
+      cpuRequestedPercent: cpuReqPct,
+      cpuLimitPercent: cpuLimPct,
+      cpuUsagePercent: clusterObservability.cpu.utilizationPercent,
       memoryUsageBytes: clusterObservability.memory.usage?.value,
       memoryRequestBytes: clusterObservability.memory.request.value,
       memoryCapacityBytes: clusterObservability.memory.capacity.value,
-      isUsageAvailable: clusterObservability.isUsageAvailable
+      memoryRequestedPercent: memReqPct,
+      memoryLimitPercent: memLimPct,
+      memoryUsagePercent: clusterObservability.memory.utilizationPercent,
+      isUsageAvailable: clusterObservability.isUsageAvailable,
+      source: clusterObservability.isUsageAvailable ? 'metrics.k8s.io' : 'spec-derived'
     };
     history.push(newPoint);
     if (history.length > 60) {

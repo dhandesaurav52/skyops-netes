@@ -326,16 +326,29 @@ export function buildNodeMetricsSummary(
   const observedAt = node.observedAt || (statusSummary.metricsObservedAt as number) || node.updatedAt || now;
   const ingestedAt = node.ingestedAt || now;
 
+  const nodeConditions: any = [
+    { type: 'Ready', status: (readyCond?.status === 'True' || node.status === 'Ready') ? 'True' : 'False' },
+    { type: 'MemoryPressure', status: memPressureCond?.status === 'True' ? 'True' : 'False' },
+    { type: 'DiskPressure', status: diskPressureCond?.status === 'True' ? 'True' : 'False' },
+    { type: 'PIDPressure', status: pidPressureCond?.status === 'True' ? 'True' : 'False' }
+  ];
+  nodeConditions.ready = readyCond?.status === 'True' || node.status === 'Ready';
+  nodeConditions.memoryPressure = memPressureCond?.status === 'True';
+  nodeConditions.diskPressure = diskPressureCond?.status === 'True';
+  nodeConditions.pidPressure = pidPressureCond?.status === 'True';
+
   return {
     clusterId: node.clusterId,
     resourceKind: 'Node',
     resourceName: node.name,
     nodeName: node.name,
+    name: node.name,
     kubeletVersion: (statusSummary.kubeletVersion as string) || undefined,
     ready: readyCond?.status === 'True' || node.status === 'Ready',
     podCount: scheduledPods.length,
     podCapacity: Number.isFinite(podCapacity) ? podCapacity : 110,
-    conditions: {
+    conditions: nodeConditions,
+    conditionFlags: {
       ready: readyCond?.status === 'True' || node.status === 'Ready',
       memoryPressure: memPressureCond?.status === 'True',
       diskPressure: diskPressureCond?.status === 'True',
@@ -345,16 +358,22 @@ export function buildNodeMetricsSummary(
       capacity: createCpuMetricValue(cpuCapacity),
       allocatable: createCpuMetricValue(cpuAllocatable),
       request: createCpuMetricValue(requestedCpu),
+      requests: createCpuMetricValue(requestedCpu),
       limit: createCpuMetricValue(limitedCpu),
+      limits: createCpuMetricValue(limitedCpu),
       usage: createCpuMetricValue(cpuUsage),
+      requestedPercent: cpuAllocatable > 0 ? Math.round((requestedCpu / cpuAllocatable) * 100) : 0,
       utilizationPercent: cpuUtilPercent
     },
     memory: {
       capacity: createMemoryMetricValue(memCapacity),
       allocatable: createMemoryMetricValue(memAllocatable),
       request: createMemoryMetricValue(requestedMem),
+      requests: createMemoryMetricValue(requestedMem),
       limit: createMemoryMetricValue(limitedMem),
+      limits: createMemoryMetricValue(limitedMem),
       usage: createMemoryMetricValue(memUsage),
+      requestedPercent: memAllocatable > 0 ? Math.round((requestedMem / memAllocatable) * 100) : 0,
       utilizationPercent: memUtilPercent
     },
     observedAt,
@@ -423,11 +442,23 @@ export function buildWorkloadMetricsSummary(
     clusterId: workload.clusterId,
     resourceKind: 'Workload',
     resourceName: workload.name,
+    name: workload.name,
     namespace: workload.namespace,
     workloadKind: workload.kind,
+    kind: workload.kind,
     desiredReplicas,
     readyReplicas,
     childPodCount: childPods.length,
+    podCount: childPods.length,
+    hasPodsWithoutLimits: totalCpuLim === 0 || totalMemLim === 0,
+    isNearMemoryLimit: memUtilPercent !== undefined && memUtilPercent > 85,
+    usageAvailable: anyUsageAvailable,
+    totalCpuRequests: createCpuMetricValue(totalCpuReq),
+    totalCpuLimits: createCpuMetricValue(totalCpuLim),
+    totalCpuUsage: createCpuMetricValue(totalCpuUsg),
+    totalMemoryRequests: createMemoryMetricValue(totalMemReq),
+    totalMemoryLimits: createMemoryMetricValue(totalMemLim),
+    totalMemoryUsage: createMemoryMetricValue(totalMemUsg),
     cpu: {
       request: createCpuMetricValue(totalCpuReq),
       limit: createCpuMetricValue(totalCpuLim),
@@ -561,6 +592,11 @@ export function buildClusterObservabilityMetrics(
     clusterMemUtil = Math.min(100, Math.round((totalMemUsage / totalMemAllocatable) * 100));
   }
 
+  const cpuReqPercent = totalCpuAllocatable > 0 ? Math.round((totalCpuRequest / totalCpuAllocatable) * 100) : 0;
+  const cpuLimitPercent = totalCpuAllocatable > 0 ? Math.round((totalCpuLimit / totalCpuAllocatable) * 100) : 0;
+  const memReqPercent = totalMemAllocatable > 0 ? Math.round((totalMemRequest / totalMemAllocatable) * 100) : 0;
+  const memLimitPercent = totalMemAllocatable > 0 ? Math.round((totalMemLimit / totalMemAllocatable) * 100) : 0;
+
   return {
     clusterId: cluster.id,
     clusterName: cluster.name,
@@ -569,17 +605,32 @@ export function buildClusterObservabilityMetrics(
     freshnessStatus: evaluateFreshness(observedAt, now),
     isUsageAvailable: anyUsageAvailable,
     metricsSource: anyUsageAvailable ? 'METRICS_SERVER' : 'SPEC_STATUS_ONLY',
+    source: anyUsageAvailable ? 'metrics.k8s.io' : 'spec-derived',
     unavailableReason: anyUsageAvailable
       ? undefined
       : 'Metrics Server (metrics.k8s.io) is not available or not reporting in this cluster',
     nodeCount: nodes.length,
     podCount: pods.length,
+    commitmentRatios: {
+      cpuRequestedPercent: cpuReqPercent,
+      cpuLimitPercent: cpuLimitPercent,
+      cpuUsagePercent: clusterCpuUtil,
+      memoryRequestedPercent: memReqPercent,
+      memoryLimitPercent: memLimitPercent,
+      memoryUsagePercent: clusterMemUtil
+    },
     cpu: {
       capacity: createCpuMetricValue(totalCpuCapacity)!,
       allocatable: createCpuMetricValue(totalCpuAllocatable)!,
       request: createCpuMetricValue(totalCpuRequest)!,
       limit: createCpuMetricValue(totalCpuLimit)!,
       usage: createCpuMetricValue(totalCpuUsage),
+      totalCapacity: createCpuMetricValue(totalCpuCapacity)!,
+      totalAllocatable: createCpuMetricValue(totalCpuAllocatable)!,
+      totalRequests: createCpuMetricValue(totalCpuRequest)!,
+      totalLimits: createCpuMetricValue(totalCpuLimit)!,
+      totalUsage: createCpuMetricValue(totalCpuUsage),
+      usageAvailable: anyUsageAvailable,
       utilizationPercent: clusterCpuUtil
     },
     memory: {
@@ -588,6 +639,12 @@ export function buildClusterObservabilityMetrics(
       request: createMemoryMetricValue(totalMemRequest)!,
       limit: createMemoryMetricValue(totalMemLimit)!,
       usage: createMemoryMetricValue(totalMemUsage),
+      totalCapacity: createMemoryMetricValue(totalMemCapacity)!,
+      totalAllocatable: createMemoryMetricValue(totalMemAllocatable)!,
+      totalRequests: createMemoryMetricValue(totalMemRequest)!,
+      totalLimits: createMemoryMetricValue(totalMemLimit)!,
+      totalUsage: createMemoryMetricValue(totalMemUsage),
+      usageAvailable: anyUsageAvailable,
       utilizationPercent: clusterMemUtil
     },
     nodes: nodeSummaries,

@@ -493,23 +493,54 @@ export interface ResourceMetrics {
 
 export interface NodeMetricsSummary extends ResourceMetrics {
   nodeName: string;
+  name?: string;
   kubeletVersion?: string;
   ready: boolean;
   podCount: number;
   podCapacity: number;
-  conditions: {
-    memoryPressure: boolean;
-    diskPressure: boolean;
-    pidPressure: boolean;
-    ready: boolean;
+  conditions: any;
+  conditionFlags?: any;
+  cpu: {
+    capacity?: ResourceMetricValue;
+    allocatable?: ResourceMetricValue;
+    request?: ResourceMetricValue;
+    requests?: ResourceMetricValue;
+    limit?: ResourceMetricValue;
+    limits?: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+    requestedPercent?: number;
+    utilizationPercent?: number;
+  };
+  memory: {
+    capacity?: ResourceMetricValue;
+    allocatable?: ResourceMetricValue;
+    request?: ResourceMetricValue;
+    requests?: ResourceMetricValue;
+    limit?: ResourceMetricValue;
+    limits?: ResourceMetricValue;
+    usage?: ResourceMetricValue;
+    requestedPercent?: number;
+    utilizationPercent?: number;
   };
 }
 
 export interface WorkloadMetricsSummary extends ResourceMetrics {
   workloadKind: string;
+  kind?: string;
+  name?: string;
   desiredReplicas: number;
   readyReplicas: number;
   childPodCount: number;
+  podCount?: number;
+  hasPodsWithoutLimits?: boolean;
+  isNearMemoryLimit?: boolean;
+  usageAvailable?: boolean;
+  totalCpuRequests?: ResourceMetricValue;
+  totalCpuLimits?: ResourceMetricValue;
+  totalCpuUsage?: ResourceMetricValue;
+  totalMemoryRequests?: ResourceMetricValue;
+  totalMemoryLimits?: ResourceMetricValue;
+  totalMemoryUsage?: ResourceMetricValue;
 }
 
 export interface ClusterObservabilityMetrics {
@@ -520,15 +551,30 @@ export interface ClusterObservabilityMetrics {
   freshnessStatus: MetricsFreshnessStatus;
   isUsageAvailable: boolean;
   metricsSource?: 'METRICS_SERVER' | 'SPEC_STATUS_ONLY';
+  source?: string;
   unavailableReason?: string;
   nodeCount: number;
   podCount: number;
+  commitmentRatios?: {
+    cpuRequestedPercent?: number;
+    cpuLimitPercent?: number;
+    cpuUsagePercent?: number;
+    memoryRequestedPercent?: number;
+    memoryLimitPercent?: number;
+    memoryUsagePercent?: number;
+  };
   cpu: {
     capacity: ResourceMetricValue;
     allocatable: ResourceMetricValue;
     request: ResourceMetricValue;
     limit: ResourceMetricValue;
     usage?: ResourceMetricValue;
+    totalCapacity?: ResourceMetricValue;
+    totalAllocatable?: ResourceMetricValue;
+    totalRequests?: ResourceMetricValue;
+    totalLimits?: ResourceMetricValue;
+    totalUsage?: ResourceMetricValue;
+    usageAvailable?: boolean;
     utilizationPercent?: number;
   };
   memory: {
@@ -537,6 +583,12 @@ export interface ClusterObservabilityMetrics {
     request: ResourceMetricValue;
     limit: ResourceMetricValue;
     usage?: ResourceMetricValue;
+    totalCapacity?: ResourceMetricValue;
+    totalAllocatable?: ResourceMetricValue;
+    totalRequests?: ResourceMetricValue;
+    totalLimits?: ResourceMetricValue;
+    totalUsage?: ResourceMetricValue;
+    usageAvailable?: boolean;
     utilizationPercent?: number;
   };
   nodes: NodeMetricsSummary[];
@@ -548,10 +600,17 @@ export interface MetricHistoryPoint {
   cpuUsageMillicores?: number;
   cpuRequestMillicores: number;
   cpuCapacityMillicores: number;
+  cpuRequestedPercent?: number;
+  cpuLimitPercent?: number;
+  cpuUsagePercent?: number;
   memoryUsageBytes?: number;
   memoryRequestBytes: number;
   memoryCapacityBytes: number;
+  memoryRequestedPercent?: number;
+  memoryLimitPercent?: number;
+  memoryUsagePercent?: number;
   isUsageAvailable: boolean;
+  source?: string;
 }
 
 export interface OverviewMetrics {

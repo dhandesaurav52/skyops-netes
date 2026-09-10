@@ -8,9 +8,7 @@ import {
   Cpu,
   Database,
   HardDrive,
-  HelpCircle,
   Info,
-  Layers,
   RefreshCw,
   Server,
   TrendingUp,
@@ -26,6 +24,7 @@ import {
   WorkloadMetricsSummary
 } from '../../types/index';
 import { Button } from '../common/UI';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 
 interface ClusterObservabilityViewProps {
   clusterId: string;
@@ -34,7 +33,7 @@ interface ClusterObservabilityViewProps {
   onSelectResource?: (resource: KubernetesResource) => void;
 }
 
-export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> = ({
+const ClusterObservabilityContent: React.FC<ClusterObservabilityViewProps> = ({
   clusterId,
   clusterName,
   resources = [],
@@ -58,16 +57,28 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
       setError(null);
 
       const [mRes, nRes, wRes, hRes] = await Promise.all([
-        api.getClusterMetrics(clusterId),
-        api.getNodeMetrics(clusterId),
-        api.getWorkloadMetrics(clusterId),
-        api.getClusterMetricHistory(clusterId)
+        api.getClusterMetrics(clusterId).catch((err) => {
+          console.warn('api.getClusterMetrics failed:', err);
+          return null;
+        }),
+        api.getNodeMetrics(clusterId).catch((err) => {
+          console.warn('api.getNodeMetrics failed:', err);
+          return [];
+        }),
+        api.getWorkloadMetrics(clusterId).catch((err) => {
+          console.warn('api.getWorkloadMetrics failed:', err);
+          return [];
+        }),
+        api.getClusterMetricHistory(clusterId).catch((err) => {
+          console.warn('api.getClusterMetricHistory failed:', err);
+          return [];
+        })
       ]);
 
       setMetrics(mRes);
-      setNodeSummaries(nRes);
-      setWorkloadSummaries(wRes);
-      setHistory(hRes);
+      setNodeSummaries(Array.isArray(nRes) ? nRes : []);
+      setWorkloadSummaries(Array.isArray(wRes) ? wRes : []);
+      setHistory(Array.isArray(hRes) ? hRes : []);
     } catch (err: any) {
       console.error('Failed to load observability metrics:', err);
       setError(err?.message || 'Failed to fetch cluster observability metrics');
@@ -133,6 +144,56 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
     );
   };
 
+  // Safe Metric Derivations
+  const cpuReqPercent =
+    metrics?.commitmentRatios?.cpuRequestedPercent ??
+    (metrics?.cpu?.allocatable?.value && metrics?.cpu?.request?.value
+      ? Math.round((metrics.cpu.request.value / metrics.cpu.allocatable.value) * 100)
+      : 0);
+
+  const cpuLimitPercent =
+    metrics?.commitmentRatios?.cpuLimitPercent ??
+    (metrics?.cpu?.allocatable?.value && metrics?.cpu?.limit?.value
+      ? Math.round((metrics.cpu.limit.value / metrics.cpu.allocatable.value) * 100)
+      : 0);
+
+  const cpuUsagePercent =
+    metrics?.commitmentRatios?.cpuUsagePercent ??
+    metrics?.cpu?.utilizationPercent;
+
+  const memReqPercent =
+    metrics?.commitmentRatios?.memoryRequestedPercent ??
+    (metrics?.memory?.allocatable?.value && metrics?.memory?.request?.value
+      ? Math.round((metrics.memory.request.value / metrics.memory.allocatable.value) * 100)
+      : 0);
+
+  const memLimitPercent =
+    metrics?.commitmentRatios?.memoryLimitPercent ??
+    (metrics?.memory?.allocatable?.value && metrics?.memory?.limit?.value
+      ? Math.round((metrics.memory.limit.value / metrics.memory.allocatable.value) * 100)
+      : 0);
+
+  const memUsagePercent =
+    metrics?.commitmentRatios?.memoryUsagePercent ??
+    metrics?.memory?.utilizationPercent;
+
+  const cpuCapacityFormatted = metrics?.cpu?.capacity?.formatted || metrics?.cpu?.totalCapacity?.formatted || '0m';
+  const cpuAllocatableFormatted = metrics?.cpu?.allocatable?.formatted || metrics?.cpu?.totalAllocatable?.formatted || '0m';
+  const cpuRequestFormatted = metrics?.cpu?.request?.formatted || metrics?.cpu?.totalRequests?.formatted || '0m';
+  const cpuLimitFormatted = metrics?.cpu?.limit?.formatted || metrics?.cpu?.totalLimits?.formatted || '0m';
+  const cpuUsageFormatted = metrics?.cpu?.usage?.formatted || metrics?.cpu?.totalUsage?.formatted;
+
+  const memCapacityFormatted = metrics?.memory?.capacity?.formatted || metrics?.memory?.totalCapacity?.formatted || '0 Mi';
+  const memAllocatableFormatted = metrics?.memory?.allocatable?.formatted || metrics?.memory?.totalAllocatable?.formatted || '0 Mi';
+  const memRequestFormatted = metrics?.memory?.request?.formatted || metrics?.memory?.totalRequests?.formatted || '0 Mi';
+  const memLimitFormatted = metrics?.memory?.limit?.formatted || metrics?.memory?.totalLimits?.formatted || '0 Mi';
+  const memUsageFormatted = metrics?.memory?.usage?.formatted || metrics?.memory?.totalUsage?.formatted;
+
+  const isMetricsServerActive =
+    metrics?.metricsSource === 'METRICS_SERVER' ||
+    metrics?.source === 'metrics.k8s.io' ||
+    metrics?.isUsageAvailable === true;
+
   if (loading && !metrics) {
     return (
       <div className="p-12 flex flex-col items-center justify-center space-y-4 text-center">
@@ -161,20 +222,38 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
   }
 
   const filteredWorkloads = workloadSummaries.filter((w) => {
+    const wName = (w.name || w.resourceName || '').toLowerCase();
+    const wNamespace = (w.namespace || '').toLowerCase();
+    const wKind = (w.kind || w.workloadKind || '').toLowerCase();
+
     if (searchFilter.trim()) {
       const q = searchFilter.toLowerCase();
-      const match = w.name.toLowerCase().includes(q) || w.namespace.toLowerCase().includes(q) || w.kind.toLowerCase().includes(q);
+      const match = wName.includes(q) || wNamespace.includes(q) || wKind.includes(q);
       if (!match) return false;
     }
 
+    const hasNoLimits =
+      w.hasPodsWithoutLimits ??
+      ((!w.cpu?.limit?.value && !(w as any).totalCpuLimits?.value) ||
+        (!w.memory?.limit?.value && !(w as any).totalMemoryLimits?.value));
+
+    const isNearLimit =
+      w.isNearMemoryLimit ??
+      ((w.memory?.utilizationPercent ?? 0) > 85);
+
+    const usageAvailable =
+      w.usageAvailable ??
+      w.isUsageAvailable ??
+      Boolean(w.cpu?.usage?.value || w.memory?.usage?.value);
+
     if (workloadFilter === 'no-limits') {
-      return w.hasPodsWithoutLimits;
+      return hasNoLimits;
     }
     if (workloadFilter === 'near-limit') {
-      return w.isNearMemoryLimit;
+      return isNearLimit;
     }
     if (workloadFilter === 'missing-usage') {
-      return !w.usageAvailable;
+      return !usageAvailable;
     }
     return true;
   });
@@ -192,18 +271,18 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
             {metrics && (
               <span
                 className={`px-2.5 py-0.5 rounded text-xs font-mono font-semibold border ${
-                  metrics.source === 'metrics.k8s.io'
+                  isMetricsServerActive
                     ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/80'
                     : 'bg-zinc-800 text-amber-300 border-amber-800/60'
                 }`}
               >
-                {metrics.source === 'metrics.k8s.io' ? 'metrics.k8s.io Active' : 'Kubelet / Pod Spec Declarations'}
+                {isMetricsServerActive ? 'metrics.k8s.io Active' : 'Kubelet / Pod Spec Declarations'}
               </span>
             )}
             {metrics && getFreshnessBadge(metrics.observedAt)}
           </div>
           <p className="text-xs text-zinc-400">
-            {metrics?.source === 'metrics.k8s.io'
+            {isMetricsServerActive
               ? 'Real-time telemetry sourced directly from the Kubernetes Metrics Server API.'
               : 'Metrics Server is not detected or active on this cluster. Allocatable capacity, requests, and limits are derived directly from Kubelet specifications.'}
           </p>
@@ -290,20 +369,18 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                 <Cpu className="w-4 h-4 text-sky-400" />
               </div>
               <div className="text-2xl font-bold font-mono text-zinc-100">
-                {metrics.commitmentRatios.cpuRequestedPercent !== undefined
-                  ? `${metrics.commitmentRatios.cpuRequestedPercent}%`
-                  : 'Unavailable'}
+                {cpuReqPercent !== undefined ? `${cpuReqPercent}%` : 'Unavailable'}
               </div>
               <div className="space-y-1">
                 <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
                   <div
-                    className={`h-full transition-all ${getCommitmentColor(metrics.commitmentRatios.cpuRequestedPercent)}`}
-                    style={{ width: `${Math.min(100, metrics.commitmentRatios.cpuRequestedPercent || 0)}%` }}
+                    className={`h-full transition-all ${getCommitmentColor(cpuReqPercent)}`}
+                    style={{ width: `${Math.min(100, cpuReqPercent || 0)}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-[10px] font-mono text-zinc-500">
-                  <span>Req: {metrics.cpu.totalRequests?.formatted || '0m'}</span>
-                  <span>Alloc: {metrics.cpu.totalAllocatable?.formatted || '0m'}</span>
+                  <span>Req: {cpuRequestFormatted}</span>
+                  <span>Alloc: {cpuAllocatableFormatted}</span>
                 </div>
               </div>
             </div>
@@ -314,20 +391,18 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                 <Database className="w-4 h-4 text-violet-400" />
               </div>
               <div className="text-2xl font-bold font-mono text-zinc-100">
-                {metrics.commitmentRatios.memoryRequestedPercent !== undefined
-                  ? `${metrics.commitmentRatios.memoryRequestedPercent}%`
-                  : 'Unavailable'}
+                {memReqPercent !== undefined ? `${memReqPercent}%` : 'Unavailable'}
               </div>
               <div className="space-y-1">
                 <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
                   <div
-                    className={`h-full transition-all ${getCommitmentColor(metrics.commitmentRatios.memoryRequestedPercent)}`}
-                    style={{ width: `${Math.min(100, metrics.commitmentRatios.memoryRequestedPercent || 0)}%` }}
+                    className={`h-full transition-all ${getCommitmentColor(memReqPercent)}`}
+                    style={{ width: `${Math.min(100, memReqPercent || 0)}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-[10px] font-mono text-zinc-500">
-                  <span>Req: {metrics.memory.totalRequests?.formatted || '0 Mi'}</span>
-                  <span>Alloc: {metrics.memory.totalAllocatable?.formatted || '0 Mi'}</span>
+                  <span>Req: {memRequestFormatted}</span>
+                  <span>Alloc: {memAllocatableFormatted}</span>
                 </div>
               </div>
             </div>
@@ -338,12 +413,8 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                 <Zap className="w-4 h-4 text-amber-400" />
               </div>
               <div className="text-2xl font-bold font-mono text-zinc-100 flex items-center gap-2">
-                <span>
-                  {metrics.commitmentRatios.cpuLimitPercent !== undefined
-                    ? `${metrics.commitmentRatios.cpuLimitPercent}%`
-                    : 'Unavailable'}
-                </span>
-                {metrics.commitmentRatios.cpuLimitPercent && metrics.commitmentRatios.cpuLimitPercent > 100 && (
+                <span>{cpuLimitPercent !== undefined ? `${cpuLimitPercent}%` : 'Unavailable'}</span>
+                {cpuLimitPercent > 100 && (
                   <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800">
                     Overcommitted
                   </span>
@@ -352,13 +423,13 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
               <div className="space-y-1">
                 <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
                   <div
-                    className={`h-full transition-all ${getCommitmentColor(metrics.commitmentRatios.cpuLimitPercent)}`}
-                    style={{ width: `${Math.min(100, metrics.commitmentRatios.cpuLimitPercent || 0)}%` }}
+                    className={`h-full transition-all ${getCommitmentColor(cpuLimitPercent)}`}
+                    style={{ width: `${Math.min(100, cpuLimitPercent || 0)}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-[10px] font-mono text-zinc-500">
-                  <span>Limit: {metrics.cpu.totalLimits?.formatted || '0m'}</span>
-                  <span>Alloc: {metrics.cpu.totalAllocatable?.formatted || '0m'}</span>
+                  <span>Limit: {cpuLimitFormatted}</span>
+                  <span>Alloc: {cpuAllocatableFormatted}</span>
                 </div>
               </div>
             </div>
@@ -369,12 +440,8 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                 <HardDrive className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="text-2xl font-bold font-mono text-zinc-100 flex items-center gap-2">
-                <span>
-                  {metrics.commitmentRatios.memoryLimitPercent !== undefined
-                    ? `${metrics.commitmentRatios.memoryLimitPercent}%`
-                    : 'Unavailable'}
-                </span>
-                {metrics.commitmentRatios.memoryLimitPercent && metrics.commitmentRatios.memoryLimitPercent > 100 && (
+                <span>{memLimitPercent !== undefined ? `${memLimitPercent}%` : 'Unavailable'}</span>
+                {memLimitPercent > 100 && (
                   <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800">
                     Risk Overcommit
                   </span>
@@ -383,13 +450,13 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
               <div className="space-y-1">
                 <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
                   <div
-                    className={`h-full transition-all ${getCommitmentColor(metrics.commitmentRatios.memoryLimitPercent)}`}
-                    style={{ width: `${Math.min(100, metrics.commitmentRatios.memoryLimitPercent || 0)}%` }}
+                    className={`h-full transition-all ${getCommitmentColor(memLimitPercent)}`}
+                    style={{ width: `${Math.min(100, memLimitPercent || 0)}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-[10px] font-mono text-zinc-500">
-                  <span>Limit: {metrics.memory.totalLimits?.formatted || '0 Mi'}</span>
-                  <span>Alloc: {metrics.memory.totalAllocatable?.formatted || '0 Mi'}</span>
+                  <span>Limit: {memLimitFormatted}</span>
+                  <span>Alloc: {memAllocatableFormatted}</span>
                 </div>
               </div>
             </div>
@@ -405,38 +472,38 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                   <h4 className="font-bold text-sm text-zinc-100 font-mono">Cluster CPU Budget</h4>
                 </div>
                 <span className="text-xs font-mono text-zinc-400">
-                  Capacity: <strong className="text-zinc-200">{metrics.cpu.totalCapacity?.formatted || '0m'}</strong>
+                  Capacity: <strong className="text-zinc-200">{cpuCapacityFormatted}</strong>
                 </span>
               </div>
 
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-xs font-mono">
                   <span className="text-zinc-400">Total Allocatable (Kubelet):</span>
-                  <span className="font-bold text-zinc-200">{metrics.cpu.totalAllocatable?.formatted || '0m'}</span>
+                  <span className="font-bold text-zinc-200">{cpuAllocatableFormatted}</span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs font-mono">
                   <span className="text-zinc-400">Scheduled Pod Requests:</span>
                   <span className="font-bold text-sky-400">
-                    {metrics.cpu.totalRequests?.formatted || '0m'} ({metrics.commitmentRatios.cpuRequestedPercent || 0}%)
+                    {cpuRequestFormatted} ({cpuReqPercent}%)
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs font-mono">
                   <span className="text-zinc-400">Scheduled Pod Limits:</span>
                   <span className="font-bold text-amber-400">
-                    {metrics.cpu.totalLimits?.formatted || '0m'} ({metrics.commitmentRatios.cpuLimitPercent || 0}%)
+                    {cpuLimitFormatted} ({cpuLimitPercent}%)
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs font-mono pt-2 border-t border-zinc-800/80">
                   <span className="text-zinc-400 flex items-center gap-1.5">
                     <span>Live Actual Usage:</span>
-                    {metrics.cpu.usageAvailable && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+                    {metrics.isUsageAvailable && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
                   </span>
-                  {metrics.cpu.usageAvailable && metrics.cpu.totalUsage ? (
+                  {metrics.isUsageAvailable && cpuUsageFormatted ? (
                     <span className="font-bold text-emerald-400 font-mono">
-                      {metrics.cpu.totalUsage.formatted} ({metrics.commitmentRatios.cpuUsagePercent || 0}% allocatable)
+                      {cpuUsageFormatted} ({cpuUsagePercent ?? 0}% allocatable)
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 text-[11px] font-mono border border-zinc-700">
@@ -455,38 +522,38 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                   <h4 className="font-bold text-sm text-zinc-100 font-mono">Cluster Memory Budget</h4>
                 </div>
                 <span className="text-xs font-mono text-zinc-400">
-                  Capacity: <strong className="text-zinc-200">{metrics.memory.totalCapacity?.formatted || '0 Mi'}</strong>
+                  Capacity: <strong className="text-zinc-200">{memCapacityFormatted}</strong>
                 </span>
               </div>
 
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-xs font-mono">
                   <span className="text-zinc-400">Total Allocatable (Kubelet):</span>
-                  <span className="font-bold text-zinc-200">{metrics.memory.totalAllocatable?.formatted || '0 Mi'}</span>
+                  <span className="font-bold text-zinc-200">{memAllocatableFormatted}</span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs font-mono">
                   <span className="text-zinc-400">Scheduled Pod Requests:</span>
                   <span className="font-bold text-violet-400">
-                    {metrics.memory.totalRequests?.formatted || '0 Mi'} ({metrics.commitmentRatios.memoryRequestedPercent || 0}%)
+                    {memRequestFormatted} ({memReqPercent}%)
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs font-mono">
                   <span className="text-zinc-400">Scheduled Pod Limits:</span>
                   <span className="font-bold text-emerald-400">
-                    {metrics.memory.totalLimits?.formatted || '0 Mi'} ({metrics.commitmentRatios.memoryLimitPercent || 0}%)
+                    {memLimitFormatted} ({memLimitPercent}%)
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs font-mono pt-2 border-t border-zinc-800/80">
                   <span className="text-zinc-400 flex items-center gap-1.5">
                     <span>Live Actual Usage:</span>
-                    {metrics.memory.usageAvailable && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+                    {metrics.isUsageAvailable && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
                   </span>
-                  {metrics.memory.usageAvailable && metrics.memory.totalUsage ? (
+                  {metrics.isUsageAvailable && memUsageFormatted ? (
                     <span className="font-bold text-emerald-400 font-mono">
-                      {metrics.memory.totalUsage.formatted} ({metrics.commitmentRatios.memoryUsagePercent || 0}% allocatable)
+                      {memUsageFormatted} ({memUsagePercent ?? 0}% allocatable)
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 text-[11px] font-mono border border-zinc-700">
@@ -523,26 +590,63 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                 </thead>
                 <tbody className="divide-y divide-zinc-800">
                   {nodeSummaries.map((node) => {
-                    const hasMemoryPressure = node.conditions?.some((c) => c.type === 'MemoryPressure' && c.status === 'True');
-                    const hasDiskPressure = node.conditions?.some((c) => c.type === 'DiskPressure' && c.status === 'True');
-                    const hasPidPressure = node.conditions?.some((c) => c.type === 'PIDPressure' && c.status === 'True');
+                    const nodeDisplayName = node.nodeName || node.name || (node as any).resourceName || 'node';
+                    
+                    // Safely extract condition booleans regardless of array or object shape
+                    let hasMemoryPressure = false;
+                    let hasDiskPressure = false;
+                    let hasPidPressure = false;
+                    let isReady = node.ready ?? false;
+
+                    if (Array.isArray(node.conditions)) {
+                      hasMemoryPressure = node.conditions.some((c: any) => c.type === 'MemoryPressure' && (c.status === 'True' || c.status === true));
+                      hasDiskPressure = node.conditions.some((c: any) => c.type === 'DiskPressure' && (c.status === 'True' || c.status === true));
+                      hasPidPressure = node.conditions.some((c: any) => c.type === 'PIDPressure' && (c.status === 'True' || c.status === true));
+                      const readyCond = node.conditions.find((c: any) => c.type === 'Ready');
+                      if (readyCond) isReady = readyCond.status === 'True' || readyCond.status === true;
+                    } else if (node.conditions && typeof node.conditions === 'object') {
+                      hasMemoryPressure = Boolean(node.conditions.memoryPressure);
+                      hasDiskPressure = Boolean(node.conditions.diskPressure);
+                      hasPidPressure = Boolean(node.conditions.pidPressure);
+                      if (node.conditions.ready !== undefined) isReady = Boolean(node.conditions.ready);
+                    }
+
+                    const nCpuAlloc = node.cpu?.allocatable?.formatted || '0m';
+                    const nCpuCap = node.cpu?.capacity?.formatted || '0m';
+                    const nCpuReq = node.cpu?.request?.formatted || (node.cpu as any)?.requests?.formatted || '0m';
+                    const nCpuUsage = node.cpu?.usage?.formatted;
+                    const nCpuReqPct =
+                      node.cpu?.requestedPercent ??
+                      (node.cpu?.allocatable?.value && (node.cpu?.request?.value || (node.cpu as any)?.requests?.value)
+                        ? Math.round(((node.cpu.request?.value || (node.cpu as any).requests.value) / node.cpu.allocatable.value) * 100)
+                        : 0);
+
+                    const nMemAlloc = node.memory?.allocatable?.formatted || '0 Mi';
+                    const nMemCap = node.memory?.capacity?.formatted || '0 Mi';
+                    const nMemReq = node.memory?.request?.formatted || (node.memory as any)?.requests?.formatted || '0 Mi';
+                    const nMemUsage = node.memory?.usage?.formatted;
+                    const nMemReqPct =
+                      node.memory?.requestedPercent ??
+                      (node.memory?.allocatable?.value && (node.memory?.request?.value || (node.memory as any)?.requests?.value)
+                        ? Math.round(((node.memory.request?.value || (node.memory as any).requests.value) / node.memory.allocatable.value) * 100)
+                        : 0);
 
                     return (
-                      <tr key={node.nodeName} className="hover:bg-zinc-850/50 transition-colors">
+                      <tr key={nodeDisplayName} className="hover:bg-zinc-850/50 transition-colors">
                         <td className="px-4 py-3 font-medium text-zinc-100 flex items-center gap-2">
                           <Server className="w-4 h-4 text-zinc-400" />
-                          <span>{node.nodeName}</span>
+                          <span>{nodeDisplayName}</span>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span
                               className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                node.ready
+                                isReady
                                   ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
                                   : 'bg-rose-950 text-rose-400 border border-rose-800'
                               }`}
                             >
-                              {node.ready ? 'Ready' : 'NotReady'}
+                              {isReady ? 'Ready' : 'NotReady'}
                             </span>
                             {hasMemoryPressure && (
                               <span className="px-1.5 py-0.5 rounded text-[10px] bg-rose-950 text-rose-400 border border-rose-800 font-bold">
@@ -567,26 +671,26 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                         <td className="px-4 py-3">
                           <div className="space-y-0.5">
                             <div className="font-bold text-zinc-200">
-                              {node.cpu.usage ? (
-                                <span className="text-emerald-400">{node.cpu.usage.formatted}</span>
+                              {nCpuUsage ? (
+                                <span className="text-emerald-400">{nCpuUsage}</span>
                               ) : (
                                 <span className="text-zinc-500">Unavailable</span>
                               )}
                               <span className="text-zinc-500 mx-1">/</span>
-                              <span>{node.cpu.allocatable.formatted}</span>
+                              <span>{nCpuAlloc}</span>
                             </div>
-                            <div className="text-[10px] text-zinc-500">Cap: {node.cpu.capacity.formatted}</div>
+                            <div className="text-[10px] text-zinc-500">Cap: {nCpuCap}</div>
                           </div>
                         </td>
                         <td className="px-4 py-3">
                           <div className="space-y-1">
                             <div className="font-bold text-sky-400">
-                              {node.cpu.requests.formatted} ({node.cpu.requestedPercent}%)
+                              {nCpuReq} ({nCpuReqPct}%)
                             </div>
                             <div className="w-24 bg-zinc-800 h-1.5 rounded-full overflow-hidden">
                               <div
-                                className={`h-full ${getCommitmentColor(node.cpu.requestedPercent)}`}
-                                style={{ width: `${Math.min(100, node.cpu.requestedPercent)}%` }}
+                                className={`h-full ${getCommitmentColor(nCpuReqPct)}`}
+                                style={{ width: `${Math.min(100, nCpuReqPct)}%` }}
                               />
                             </div>
                           </div>
@@ -594,31 +698,31 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                         <td className="px-4 py-3">
                           <div className="space-y-0.5">
                             <div className="font-bold text-zinc-200">
-                              {node.memory.usage ? (
-                                <span className="text-emerald-400">{node.memory.usage.formatted}</span>
+                              {nMemUsage ? (
+                                <span className="text-emerald-400">{nMemUsage}</span>
                               ) : (
                                 <span className="text-zinc-500">Unavailable</span>
                               )}
                               <span className="text-zinc-500 mx-1">/</span>
-                              <span>{node.memory.allocatable.formatted}</span>
+                              <span>{nMemAlloc}</span>
                             </div>
-                            <div className="text-[10px] text-zinc-500">Cap: {node.memory.capacity.formatted}</div>
+                            <div className="text-[10px] text-zinc-500">Cap: {nMemCap}</div>
                           </div>
                         </td>
                         <td className="px-4 py-3">
                           <div className="space-y-1">
                             <div className="font-bold text-violet-400">
-                              {node.memory.requests.formatted} ({node.memory.requestedPercent}%)
+                              {nMemReq} ({nMemReqPct}%)
                             </div>
                             <div className="w-24 bg-zinc-800 h-1.5 rounded-full overflow-hidden">
                               <div
-                                className={`h-full ${getCommitmentColor(node.memory.requestedPercent)}`}
-                                style={{ width: `${Math.min(100, node.memory.requestedPercent)}%` }}
+                                className={`h-full ${getCommitmentColor(nMemReqPct)}`}
+                                style={{ width: `${Math.min(100, nMemReqPct)}%` }}
                               />
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-zinc-300 font-bold">{node.podCount}</td>
+                        <td className="px-4 py-3 text-zinc-300 font-bold">{node.podCount ?? 0}</td>
                       </tr>
                     );
                   })}
@@ -710,81 +814,110 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800">
-                    {filteredWorkloads.map((w) => (
-                      <tr key={`${w.namespace}/${w.kind}/${w.name}`} className="hover:bg-zinc-850/50 transition-colors">
-                        <td className="px-4 py-3 font-medium text-zinc-100 flex items-center gap-2">
-                          <Boxes className="w-4 h-4 text-sky-400" />
-                          <span>{w.name}</span>
-                        </td>
-                        <td className="px-4 py-3 text-zinc-400">
-                          <div>
-                            <span className="text-zinc-300 font-semibold">{w.kind}</span>
-                            <span className="text-zinc-500 ml-1">in {w.namespace}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {w.hasPodsWithoutLimits && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-800 flex items-center gap-1">
-                                <AlertTriangle className="w-3 h-3" />
-                                No Limits Set
-                              </span>
-                            )}
-                            {w.isNearMemoryLimit && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800 flex items-center gap-1">
-                                <AlertOctagon className="w-3 h-3" />
-                                Near Memory Limit
-                              </span>
-                            )}
-                            {!w.usageAvailable && (
-                              <span className="px-2 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700">
-                                Usage Unavailable
-                              </span>
-                            )}
-                            {!w.hasPodsWithoutLimits && !w.isNearMemoryLimit && w.usageAvailable && (
-                              <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800">
-                                Healthy Spec
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="space-y-0.5">
-                            <div className="text-zinc-300">
-                              Req: <strong className="text-sky-400">{w.totalCpuRequests.formatted}</strong>
-                              <span className="text-zinc-500 mx-1">|</span>
-                              Limit: <strong className="text-amber-400">{w.totalCpuLimits.formatted}</strong>
+                    {filteredWorkloads.map((w) => {
+                      const wName = w.name || (w as any).resourceName || 'workload';
+                      const wKind = w.kind || w.workloadKind || 'Workload';
+                      const wNamespace = w.namespace || 'default';
+                      const wPods = w.childPodCount ?? w.podCount ?? 0;
+
+                      const wCpuReq = w.cpu?.request?.formatted || (w as any).totalCpuRequests?.formatted || '0m';
+                      const wCpuLim = w.cpu?.limit?.formatted || (w as any).totalCpuLimits?.formatted || '0m';
+                      const wCpuUsage = w.cpu?.usage?.formatted || (w as any).totalCpuUsage?.formatted;
+
+                      const wMemReq = w.memory?.request?.formatted || (w as any).totalMemoryRequests?.formatted || '0 Mi';
+                      const wMemLim = w.memory?.limit?.formatted || (w as any).totalMemoryLimits?.formatted || '0 Mi';
+                      const wMemUsage = w.memory?.usage?.formatted || (w as any).totalMemoryUsage?.formatted;
+
+                      const hasNoLimits =
+                        w.hasPodsWithoutLimits ??
+                        ((!w.cpu?.limit?.value && !(w as any).totalCpuLimits?.value) ||
+                          (!w.memory?.limit?.value && !(w as any).totalMemoryLimits?.value));
+
+                      const isNearLimit =
+                        w.isNearMemoryLimit ??
+                        ((w.memory?.utilizationPercent ?? 0) > 85);
+
+                      const usageAvailable =
+                        w.usageAvailable ??
+                        w.isUsageAvailable ??
+                        Boolean(wCpuUsage || wMemUsage);
+
+                      return (
+                        <tr key={`${wNamespace}/${wKind}/${wName}`} className="hover:bg-zinc-850/50 transition-colors">
+                          <td className="px-4 py-3 font-medium text-zinc-100 flex items-center gap-2">
+                            <Boxes className="w-4 h-4 text-sky-400" />
+                            <span>{wName}</span>
+                          </td>
+                          <td className="px-4 py-3 text-zinc-400">
+                            <div>
+                              <span className="text-zinc-300 font-semibold">{wKind}</span>
+                              <span className="text-zinc-500 ml-1">in {wNamespace}</span>
                             </div>
-                            <div className="text-[10px] text-zinc-400">
-                              Usage:{' '}
-                              {w.usageAvailable && w.totalCpuUsage ? (
-                                <strong className="text-emerald-400">{w.totalCpuUsage.formatted}</strong>
-                              ) : (
-                                <span className="text-zinc-500">Unavailable</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {hasNoLimits && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-800 flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  No Limits Set
+                                </span>
+                              )}
+                              {isNearLimit && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-400 border border-rose-800 flex items-center gap-1">
+                                  <AlertOctagon className="w-3 h-3" />
+                                  Near Memory Limit
+                                </span>
+                              )}
+                              {!usageAvailable && (
+                                <span className="px-2 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700">
+                                  Usage Unavailable
+                                </span>
+                              )}
+                              {!hasNoLimits && !isNearLimit && usageAvailable && (
+                                <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800">
+                                  Healthy Spec
+                                </span>
                               )}
                             </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="space-y-0.5">
-                            <div className="text-zinc-300">
-                              Req: <strong className="text-violet-400">{w.totalMemoryRequests.formatted}</strong>
-                              <span className="text-zinc-500 mx-1">|</span>
-                              Limit: <strong className="text-emerald-400">{w.totalMemoryLimits.formatted}</strong>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="space-y-0.5">
+                              <div className="text-zinc-300">
+                                Req: <strong className="text-sky-400">{wCpuReq}</strong>
+                                <span className="text-zinc-500 mx-1">|</span>
+                                Limit: <strong className="text-amber-400">{wCpuLim}</strong>
+                              </div>
+                              <div className="text-[10px] text-zinc-400">
+                                Usage:{' '}
+                                {usageAvailable && wCpuUsage ? (
+                                  <strong className="text-emerald-400">{wCpuUsage}</strong>
+                                ) : (
+                                  <span className="text-zinc-500">Unavailable</span>
+                                )}
+                              </div>
                             </div>
-                            <div className="text-[10px] text-zinc-400">
-                              Usage:{' '}
-                              {w.usageAvailable && w.totalMemoryUsage ? (
-                                <strong className="text-emerald-400">{w.totalMemoryUsage.formatted}</strong>
-                              ) : (
-                                <span className="text-zinc-500">Unavailable</span>
-                              )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="space-y-0.5">
+                              <div className="text-zinc-300">
+                                Req: <strong className="text-violet-400">{wMemReq}</strong>
+                                <span className="text-zinc-500 mx-1">|</span>
+                                Limit: <strong className="text-emerald-400">{wMemLim}</strong>
+                              </div>
+                              <div className="text-[10px] text-zinc-400">
+                                Usage:{' '}
+                                {usageAvailable && wMemUsage ? (
+                                  <strong className="text-emerald-400">{wMemUsage}</strong>
+                                ) : (
+                                  <span className="text-zinc-500">Unavailable</span>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-zinc-300 font-bold">{w.podCount}</td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-4 py-3 text-zinc-300 font-bold">{wPods}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -843,28 +976,68 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
                     {history
                       .slice()
                       .reverse()
-                      .map((pt) => (
-                        <tr key={pt.timestamp} className="hover:bg-zinc-850/50 transition-colors">
-                          <td className="px-4 py-3 text-zinc-300">
-                            {new Date(pt.timestamp).toLocaleTimeString()} ({formatFreshnessTime(pt.timestamp)})
-                          </td>
-                          <td className="px-4 py-3 font-bold text-sky-400">{pt.cpuRequestedPercent ?? 'N/A'}%</td>
-                          <td className="px-4 py-3 font-bold text-amber-400">{pt.cpuLimitPercent ?? 'N/A'}%</td>
-                          <td className="px-4 py-3 font-bold text-emerald-400">
-                            {pt.cpuUsagePercent !== undefined ? `${pt.cpuUsagePercent}%` : 'Unavailable'}
-                          </td>
-                          <td className="px-4 py-3 font-bold text-violet-400">{pt.memoryRequestedPercent ?? 'N/A'}%</td>
-                          <td className="px-4 py-3 font-bold text-emerald-400">{pt.memoryLimitPercent ?? 'N/A'}%</td>
-                          <td className="px-4 py-3 font-bold text-emerald-400">
-                            {pt.memoryUsagePercent !== undefined ? `${pt.memoryUsagePercent}%` : 'Unavailable'}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700">
-                              {pt.source}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      .map((pt) => {
+                        const ptCpuReq =
+                          pt.cpuRequestedPercent ??
+                          (pt.cpuCapacityMillicores && pt.cpuRequestMillicores
+                            ? Math.round((pt.cpuRequestMillicores / pt.cpuCapacityMillicores) * 100)
+                            : undefined);
+
+                        const ptCpuLim = pt.cpuLimitPercent;
+
+                        const ptCpuUsage =
+                          pt.cpuUsagePercent ??
+                          (pt.cpuCapacityMillicores && pt.cpuUsageMillicores !== undefined
+                            ? Math.round((pt.cpuUsageMillicores / pt.cpuCapacityMillicores) * 100)
+                            : undefined);
+
+                        const ptMemReq =
+                          pt.memoryRequestedPercent ??
+                          (pt.memoryCapacityBytes && pt.memoryRequestBytes
+                            ? Math.round((pt.memoryRequestBytes / pt.memoryCapacityBytes) * 100)
+                            : undefined);
+
+                        const ptMemLim = pt.memoryLimitPercent;
+
+                        const ptMemUsage =
+                          pt.memoryUsagePercent ??
+                          (pt.memoryCapacityBytes && pt.memoryUsageBytes !== undefined
+                            ? Math.round((pt.memoryUsageBytes / pt.memoryCapacityBytes) * 100)
+                            : undefined);
+
+                        const ptSource = pt.source || (pt.isUsageAvailable ? 'metrics.k8s.io' : 'spec-derived');
+
+                        return (
+                          <tr key={pt.timestamp} className="hover:bg-zinc-850/50 transition-colors">
+                            <td className="px-4 py-3 text-zinc-300">
+                              {new Date(pt.timestamp).toLocaleTimeString()} ({formatFreshnessTime(pt.timestamp)})
+                            </td>
+                            <td className="px-4 py-3 font-bold text-sky-400">
+                              {ptCpuReq !== undefined ? `${ptCpuReq}%` : 'N/A'}
+                            </td>
+                            <td className="px-4 py-3 font-bold text-amber-400">
+                              {ptCpuLim !== undefined ? `${ptCpuLim}%` : 'N/A'}
+                            </td>
+                            <td className="px-4 py-3 font-bold text-emerald-400">
+                              {ptCpuUsage !== undefined ? `${ptCpuUsage}%` : 'Unavailable'}
+                            </td>
+                            <td className="px-4 py-3 font-bold text-violet-400">
+                              {ptMemReq !== undefined ? `${ptMemReq}%` : 'N/A'}
+                            </td>
+                            <td className="px-4 py-3 font-bold text-emerald-400">
+                              {ptMemLim !== undefined ? `${ptMemLim}%` : 'N/A'}
+                            </td>
+                            <td className="px-4 py-3 font-bold text-emerald-400">
+                              {ptMemUsage !== undefined ? `${ptMemUsage}%` : 'Unavailable'}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 border border-zinc-700">
+                                {ptSource}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                   </tbody>
                 </table>
               </div>
@@ -873,5 +1046,16 @@ export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> =
         </div>
       )}
     </div>
+  );
+};
+
+export const ClusterObservabilityView: React.FC<ClusterObservabilityViewProps> = (props) => {
+  return (
+    <ErrorBoundary
+      fallbackTitle="Observability Telemetry Interface"
+      fallbackMessage="An unexpected error occurred while visualizing cluster observability telemetry. You can safely retry or return to cluster overview."
+    >
+      <ClusterObservabilityContent {...props} />
+    </ErrorBoundary>
   );
 };

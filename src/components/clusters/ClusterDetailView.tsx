@@ -31,6 +31,7 @@ import { WorkloadDetailModal } from '../resources/WorkloadDetailModal';
 import { PodsView } from '../pods/PodsView';
 import { WorkloadsView } from '../workloads/WorkloadsView';
 import { ClusterObservabilityView } from './ClusterObservabilityView';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 
 interface ClusterDetailViewProps {
   clusterId: string;
@@ -41,7 +42,7 @@ interface ClusterDetailViewProps {
 
 type ResourceTab = 'overview' | 'observability' | 'workloads' | 'pods' | 'nodes' | 'pvcs' | 'events' | 'agent';
 
-export const ClusterDetailView: React.FC<ClusterDetailViewProps> = ({ clusterId, onBack, onSelectIncident, onDeleteCluster }) => {
+const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, onBack, onSelectIncident, onDeleteCluster }) => {
   const { role, canDeleteClusters } = useAuth();
   const canManage = role === 'OWNER' || role === 'ADMIN';
 
@@ -752,7 +753,7 @@ export const ClusterDetailView: React.FC<ClusterDetailViewProps> = ({ clusterId,
                       <div className="text-[11px] text-zinc-400">
                         {inc.namespace && `Namespace: ${inc.namespace} • `}
                         {inc.resourceName && `Resource: ${inc.resourceName} • `}
-                        Opened {formatTimeAgo(inc.createdAt)}
+                        Opened {formatTimeAgo(inc.firstSeenAt || (inc as any).createdAt)}
                       </div>
                     </div>
                     {onSelectIncident && (
@@ -1159,5 +1160,17 @@ export const ClusterDetailView: React.FC<ClusterDetailViewProps> = ({ clusterId,
         </Modal>
       )}
     </div>
+  );
+};
+
+export const ClusterDetailView: React.FC<ClusterDetailViewProps> = (props) => {
+  return (
+    <ErrorBoundary
+      fallbackTitle="Cluster Detail Error"
+      fallbackMessage="An unexpected error occurred while loading this cluster. You can return to the clusters list or retry."
+      onReset={props.onBack}
+    >
+      <ClusterDetailViewInner {...props} />
+    </ErrorBoundary>
   );
 };
