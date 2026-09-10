@@ -1,4 +1,4 @@
-import { Bell, HelpCircle, Shield, Terminal } from 'lucide-react';
+import { Bell, HelpCircle, PanelLeftClose, PanelLeftOpen, Shield, Terminal } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api/client';
 import { AGENT_VERSION } from '../../config/version';
@@ -28,6 +28,36 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
   const [isAddClusterOpen, setIsAddClusterOpen] = useState(initialOpenAddCluster);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        return localStorage.getItem('skyops_sidebar_collapsed') === 'true';
+      }
+    } catch {}
+    return false;
+  });
+
+  const handleToggleSidebar = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('skyops_sidebar_collapsed', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  // Keyboard shortcut Ctrl+B / Cmd+B for toggling navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        handleToggleSidebar();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Global state
   const defaultMetrics: OverviewMetrics = {
@@ -187,31 +217,63 @@ export const AppShell: React.FC<AppShellProps> = ({
         openIncidentsCount={openIncidentsCount}
         onOpenAddCluster={() => setIsAddClusterOpen(true)}
         onSignOut={onSignOut}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={handleToggleSidebar}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0 overflow-y-auto bg-zinc-950">
         {/* Top Operational Bar */}
-        <header className="h-12 border-b border-zinc-800/80 px-6 flex items-center justify-between shrink-0 bg-zinc-950/80 backdrop-blur-xs">
+        <header className="h-12 border-b border-zinc-800/80 px-4 sm:px-6 flex items-center justify-between shrink-0 bg-zinc-950/80 backdrop-blur-xs">
           <div className="flex items-center gap-3 text-xs font-mono text-zinc-400">
+            {/* Pull / Push Navigation Bar Toggle Button */}
+            <button
+              onClick={handleToggleSidebar}
+              id="navbar-sidebar-toggle-btn"
+              title={
+                isSidebarCollapsed
+                  ? 'Pull navigation (Expand sidebar) [Ctrl+B]'
+                  : 'Push navigation (Collapse sidebar to get more space) [Ctrl+B]'
+              }
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono transition-all cursor-pointer shadow-xs border ${
+                isSidebarCollapsed
+                  ? 'bg-sky-950/70 border-sky-700/80 text-sky-300 hover:bg-sky-900/80 hover:text-white shadow-sky-950/40'
+                  : 'bg-zinc-900/90 border-zinc-700/80 text-zinc-300 hover:bg-zinc-800 hover:text-white hover:border-zinc-600'
+              }`}
+            >
+              {isSidebarCollapsed ? (
+                <>
+                  <PanelLeftOpen className="w-3.5 h-3.5 text-sky-400 animate-pulse" />
+                  <span className="font-semibold text-sky-300 text-[11px]">Pull Nav</span>
+                </>
+              ) : (
+                <>
+                  <PanelLeftClose className="w-3.5 h-3.5 text-zinc-400" />
+                  <span className="text-zinc-300 text-[11px]">Push Nav</span>
+                </>
+              )}
+            </button>
+
+            <span className="text-zinc-700">|</span>
+
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               Central Ingestion API: <strong className="text-zinc-200">Online</strong>
             </span>
-            <span className="text-zinc-700">|</span>
-            <span>
+            <span className="text-zinc-700 hidden md:inline">|</span>
+            <span className="hidden md:inline">
               Tenant: <strong className="text-sky-400">{currentOrg?.name || 'Workspace'}</strong>
             </span>
           </div>
 
           <div className="flex items-center gap-3 text-xs font-mono text-zinc-400">
-            <span className="text-emerald-400 flex items-center gap-1">
+            <span className="text-emerald-400 hidden sm:flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               Autonomous Engine Active
             </span>
-            <span className="text-zinc-700">|</span>
+            <span className="text-zinc-700 hidden sm:inline">|</span>
             <span>
-              SkyOps Agent Version: <strong className="text-zinc-200">{AGENT_VERSION}</strong>
+              SkyOps Agent: <strong className="text-zinc-200">{AGENT_VERSION}</strong>
             </span>
           </div>
         </header>

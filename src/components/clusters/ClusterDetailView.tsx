@@ -860,40 +860,57 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
-                {getFilteredResources().map((res) => (
-                  <tr
-                    key={res.id}
-                    onClick={() => setSelectedResource(res)}
-                    className="hover:bg-zinc-800/40 transition-colors cursor-pointer"
-                  >
-                    <td className="px-4 py-3 font-semibold text-zinc-100">{res.name}</td>
-                    <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded text-[11px] bg-emerald-950/40 text-emerald-300 border border-emerald-800/50">
-                        {res.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-zinc-400">
-                      {(res.statusSummary?.kubeletVersion as string) || 'v1.28.2'}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-300">
-                      {String(res.statusSummary?.allocatableMemory || '64Gi')}
-                    </td>
-                    <td className="px-4 py-3 text-zinc-300">
-                      {String(res.statusSummary?.allocatableCpu || '16 cores')}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedResource(res);
-                        }}
-                        className="px-2 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded font-mono"
-                      >
-                        Inspect
-                      </button>
+                {getFilteredResources().length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-zinc-500 font-mono text-xs">
+                      No nodes found in this cluster.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  getFilteredResources().map((res) => {
+                    const kubeletVer = (res.statusSummary?.kubeletVersion as string) || (res.specSummary?.kubeletVersion as string) || cluster.k8sVersion || 'v1.35.1';
+                    const allocMem = (res.statusSummary?.allocatable as any)?.memory || res.statusSummary?.allocatableMemory || (res.statusSummary?.capacity as any)?.memory || '32Gi';
+                    const allocCpu = (res.statusSummary?.allocatable as any)?.cpu || res.statusSummary?.allocatableCpu || (res.statusSummary?.capacity as any)?.cpu || '8 cores';
+                    return (
+                      <tr
+                        key={res.id}
+                        onClick={() => setSelectedResource(res)}
+                        className="hover:bg-zinc-800/40 transition-colors cursor-pointer"
+                      >
+                        <td className="px-4 py-3 font-semibold text-zinc-100">{res.name}</td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-0.5 rounded text-[11px] ${
+                            res.status === 'Ready'
+                              ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-800/50'
+                              : 'bg-amber-950/40 text-amber-300 border border-amber-800/50'
+                          }`}>
+                            {res.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-zinc-400">
+                          {kubeletVer}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-300">
+                          {String(allocMem)}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-300">
+                          {String(allocCpu)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedResource(res);
+                            }}
+                            className="px-2 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded font-mono"
+                          >
+                            Inspect
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

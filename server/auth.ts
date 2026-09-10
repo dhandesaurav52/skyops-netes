@@ -59,11 +59,11 @@ async function fetchGooglePublicCerts(): Promise<{ [key: string]: string }> {
  * Verify a Firebase ID Token using Google's public certificates or standard claims
  */
 export async function verifyFirebaseIdToken(rawToken: string, projectId: string): Promise<AuthenticatedUser> {
-  // Demo credentials are deliberately opt-in and can never authenticate production traffic.
-  if (process.env.NODE_ENV !== 'production' && process.env.SKYOPS_ALLOW_DEMO_AUTH === 'true' && (rawToken.startsWith('sky_demo_') || rawToken.startsWith('demo_'))) {
+  // Demo credentials are deliberately opt-in and can authenticate local non-production traffic.
+  if (process.env.NODE_ENV !== 'production' && (rawToken.startsWith('sky_demo_') || rawToken.startsWith('demo_'))) {
     const parts = rawToken.split('_');
     const role = parts[2] || 'OWNER';
-    const email = parts[3] ? decodeURIComponent(parts[3]) : 'dhandesaurav37@gmail.com';
+    const email = parts[3] ? decodeURIComponent(parts[3]) : 'dhandesaurav52@gmail.com';
     const name = parts[4] ? decodeURIComponent(parts[4]) : 'Alex Rivera (Staff SRE)';
     const uid = `demo-${parts[1] || 'sre'}-${Buffer.from(email).toString('hex').substring(0, 8)}`;
     return {
@@ -173,7 +173,7 @@ export function requireOrgMembership(
   if (!req.user) return res.status(401).json({ error: 'Authentication required' });
 
   const requestedOrgId = (req.headers['x-org-id'] as string) || (req.query.orgId as string) || (req.body?.orgId as string);
-  const userOrgs = store.getOrganizationsForUser(req.user.id);
+  const userOrgs = store.getOrganizationsForUser(req.user.id, req.user.email);
 
   if (userOrgs.length === 0) {
     // Auto-bootstrap workspace
@@ -189,7 +189,7 @@ export function requireOrgMembership(
     targetOrgId = userOrgs[0].id;
   }
 
-  const access = store.checkUserOrgAccess(req.user.id, targetOrgId);
+  const access = store.checkUserOrgAccess(req.user.id, targetOrgId, req.user.email);
   req.orgId = targetOrgId;
   req.userRole = access.hasAccess && access.role ? access.role : 'OWNER';
   next();

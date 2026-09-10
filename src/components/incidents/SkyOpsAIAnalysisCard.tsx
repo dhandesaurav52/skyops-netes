@@ -319,15 +319,15 @@ Ticket: ${analysis.incidentId}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div className="space-y-2 text-xs">
                 {analysis.evidence.map((ev, idx) => (
-                  <div key={idx} className="p-2 rounded bg-zinc-900/70 border border-zinc-800 flex items-start gap-2">
+                  <div key={idx} className="p-3 rounded-lg bg-zinc-900/80 border border-zinc-800/90 flex items-start gap-2.5">
                     <div className="shrink-0 mt-0.5">{getEvidenceCategoryBadge(ev.category)}</div>
                     <div className="min-w-0 flex-1">
-                      <span className="font-mono text-[9px] font-bold text-zinc-400 uppercase block">
+                      <span className="font-mono text-[10px] font-bold text-zinc-400 uppercase block">
                         {ev.source}
                       </span>
-                      <p className="text-zinc-200 text-xs mt-0.5 break-words font-mono">{ev.detail}</p>
+                      <p className="text-zinc-200 text-xs mt-1 leading-relaxed whitespace-pre-wrap break-words font-mono">{ev.detail}</p>
                     </div>
                   </div>
                 ))}

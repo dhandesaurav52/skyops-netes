@@ -133,7 +133,7 @@ app.get('/api/health', (req, res) => {
 // --- Auth & Session ---
 app.post('/api/v1/auth/session', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
   const user = req.user!;
-  const orgs = store.getOrganizationsForUser(user.id);
+  const orgs = store.getOrganizationsForUser(user.id, user.email);
   const currentOrg = orgs.find((o) => o.id === req.orgId) || orgs[0];
   const members = currentOrg ? store.getOrgMembers(currentOrg.id) : [];
 
@@ -148,7 +148,7 @@ app.post('/api/v1/auth/session', requireUserAuth, requireOrgMembership, (req: Au
 
 app.get('/api/v1/auth/me', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
   const user = req.user!;
-  const orgs = store.getOrganizationsForUser(user.id);
+  const orgs = store.getOrganizationsForUser(user.id, user.email);
   const currentOrg = orgs.find((o) => o.id === req.orgId) || orgs[0];
 
   res.json({
@@ -160,7 +160,7 @@ app.get('/api/v1/auth/me', requireUserAuth, requireOrgMembership, (req: Authenti
 
 // --- Organizations ---
 app.get('/api/v1/orgs', requireUserAuth, (req: AuthenticatedUserRequest, res) => {
-  const orgs = store.getOrganizationsForUser(req.user!.id);
+  const orgs = store.getOrganizationsForUser(req.user!.id, req.user!.email);
   res.json({ organizations: orgs });
 });
 

@@ -114,16 +114,16 @@ export const AuditView: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 sm:p-8 space-y-6 max-w-7xl mx-auto w-full font-sans">
       {/* Top Header & Export Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800 pb-5">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800/80 pb-5">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-sky-950/60 border border-sky-800/80 flex items-center justify-center text-sky-400">
-              <ShieldCheck className="w-4 h-4" />
+            <div className="w-9 h-9 rounded-lg bg-sky-950/70 border border-sky-800/80 flex items-center justify-center text-sky-400 shadow-xs">
+              <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-zinc-100 font-mono">Enterprise Audit & Compliance</h1>
+              <h1 className="text-xl font-bold text-zinc-100 font-mono tracking-tight">Enterprise Audit & Compliance</h1>
               <p className="text-xs text-zinc-400 font-mono mt-0.5">
                 Immutable, cryptographically verifiable ledger of administrative actions, human approvals, and agent executions.
               </p>
@@ -164,27 +164,27 @@ export const AuditView: React.FC = () => {
       </div>
 
       {/* Summary Stat Pills */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-800/80">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+        <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/80 shadow-xs hover:border-zinc-700/60 transition-colors">
           <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">Total Recorded Events</span>
-          <div className="text-xl font-bold font-mono text-zinc-100 mt-1">{total}</div>
+          <div className="text-xl font-bold font-mono text-zinc-100 mt-1.5">{total}</div>
         </div>
-        <div className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-800/80">
+        <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/80 shadow-xs hover:border-zinc-700/60 transition-colors">
           <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">Ledger Integrity</span>
-          <div className="text-xl font-bold font-mono text-emerald-400 mt-1 flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          <div className="text-xl font-bold font-mono text-emerald-400 mt-1.5 flex items-center gap-1.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>SHA-256 Valid</span>
           </div>
         </div>
-        <div className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-800/80">
+        <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/80 shadow-xs hover:border-zinc-700/60 transition-colors">
           <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">Autonomous Events</span>
-          <div className="text-xl font-bold font-mono text-sky-400 mt-1">
+          <div className="text-xl font-bold font-mono text-sky-400 mt-1.5">
             {logs.filter((l) => l.actorType === 'AGENT').length} (Page)
           </div>
         </div>
-        <div className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-800/80">
+        <div className="p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/80 shadow-xs hover:border-zinc-700/60 transition-colors">
           <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">Retention Policy</span>
-          <div className="text-xl font-bold font-mono text-zinc-200 mt-1">365 Days</div>
+          <div className="text-xl font-bold font-mono text-zinc-200 mt-1.5">365 Days</div>
         </div>
       </div>
 
@@ -332,24 +332,30 @@ export const AuditView: React.FC = () => {
 
                       {/* Detail Inspection Drawer */}
                       {isExpanded && (
-                        <tr className="bg-zinc-900/30">
+                        <tr className="bg-zinc-900/40">
                           <td colSpan={7} className="px-6 py-4 border-t border-b border-zinc-800/80">
                             <div className="space-y-3">
-                              <div className="flex items-center justify-between">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
                                 <div className="text-xs font-mono text-zinc-300 flex items-center gap-2">
                                   <Hash className="w-3.5 h-3.5 text-zinc-500" />
-                                  <span>Log Event ID: <code className="text-zinc-100">{log.id}</code></span>
+                                  <span>Log Event ID: <code className="text-zinc-100 bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800">{log.id}</code></span>
+                                  <CopyButton text={log.id} />
                                 </div>
-                                <div className="text-xs font-mono text-zinc-400">
-                                  Integrity Hash: <code className="text-emerald-400">{log.hash}</code>
+                                <div className="text-xs font-mono text-zinc-400 flex items-center gap-2">
+                                  <span>Integrity Hash:</span>
+                                  <code className="text-emerald-400 bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800">{log.hash}</code>
+                                  <CopyButton text={log.hash || ''} />
                                 </div>
                               </div>
 
                               <div>
-                                <div className="text-[11px] font-mono text-zinc-400 uppercase mb-1">
-                                  Payload Details & Context:
+                                <div className="flex items-center justify-between mb-1.5">
+                                  <div className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">
+                                    Payload Details & Context:
+                                  </div>
+                                  <CopyButton text={JSON.stringify(log.details || {}, null, 2)} />
                                 </div>
-                                <pre className="p-3 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-300 overflow-x-auto">
+                                <pre className="p-3 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-300 overflow-x-auto max-h-60 leading-relaxed">
                                   {JSON.stringify(log.details || {}, null, 2)}
                                 </pre>
                               </div>

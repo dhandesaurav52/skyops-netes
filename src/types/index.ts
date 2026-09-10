@@ -418,8 +418,8 @@ export interface KubernetesResource {
   health: 'HEALTHY' | 'WARNING' | 'CRITICAL';
   createdAt: number;
   updatedAt: number;
-  specSummary: Record<string, unknown>;
-  statusSummary: Record<string, unknown>;
+  specSummary?: Record<string, unknown>;
+  statusSummary?: Record<string, unknown>;
   conditions?: ConditionDiagnostic[];
   containers?: ContainerDiagnostic[];
   events?: K8sEvent[];
@@ -430,6 +430,9 @@ export interface KubernetesResource {
   annotations?: Record<string, string>;
   ownerReferences?: Array<{ uid?: string; kind?: string; name?: string; controller?: boolean }>;
   metrics?: ResourceMetrics;
+  cpuUsage?: number;
+  memoryUsage?: number;
+  restartCount?: number;
   observedAt?: number;
   ingestedAt?: number;
 }
