@@ -765,6 +765,115 @@ export class DataStore {
       }
     }
 
+    // Cross-correlate Services with Endpoints, EndpointSlices, and Pods for accurate service health
+    const endpointsByService = new Map<string, KubernetesResource>();
+    const endpointSlicesByService = new Map<string, KubernetesResource[]>();
+    for (const r of finalResources) {
+      if (r.kind === 'Endpoints') {
+        endpointsByService.set(`${(r.namespace || '').toLowerCase()}/${r.name.toLowerCase()}`, r);
+      } else if (r.kind === 'EndpointSlice') {
+        const svcName = ((r.specSummary?.serviceName as string) || (r.labels?.['kubernetes.io/service-name'] as string) || r.name).toLowerCase();
+        const key = `${(r.namespace || '').toLowerCase()}/${svcName}`;
+        if (!endpointSlicesByService.has(key)) endpointSlicesByService.set(key, []);
+        endpointSlicesByService.get(key)!.push(r);
+      }
+    }
+
+    for (const res of incomingResources) {
+      if (res.kind === 'Service') {
+        const key = `${(res.namespace || '').toLowerCase()}/${res.name.toLowerCase()}`;
+        const epObj = endpointsByService.get(key);
+        const epSlices = endpointSlicesByService.get(key) || [];
+
+        // If readyEndpoints not yet populated by agent, derive from Endpoints and EndpointSlices
+        let readyEndpoints = res.statusSummary?.readyEndpoints as number | undefined;
+        let notReadyEndpoints = res.statusSummary?.notReadyEndpoints as number | undefined;
+        let totalEndpoints = res.statusSummary?.totalEndpoints as number | undefined;
+        let hasEndpointsObject = res.statusSummary?.hasEndpointsObject as boolean | undefined;
+
+        if (readyEndpoints === undefined) {
+          if (epSlices.length > 0) {
+            hasEndpointsObject = true;
+            readyEndpoints = 0;
+            notReadyEndpoints = 0;
+            for (const slice of epSlices) {
+              const r = (slice.statusSummary?.readyEndpoints as number) ?? (slice.specSummary?.readyCount as number) ?? 0;
+              const nr = (slice.statusSummary?.notReadyEndpoints as number) ?? (slice.specSummary?.notReadyCount as number) ?? 0;
+              readyEndpoints += r;
+              notReadyEndpoints += nr;
+            }
+            totalEndpoints = readyEndpoints + notReadyEndpoints;
+          } else if (epObj) {
+            hasEndpointsObject = true;
+            readyEndpoints = (epObj.statusSummary?.readyAddresses as number) ?? (epObj.specSummary?.readyCount as number) ?? 0;
+            notReadyEndpoints = (epObj.statusSummary?.notReadyAddresses as number) ?? (epObj.specSummary?.notReadyCount as number) ?? 0;
+            totalEndpoints = readyEndpoints + notReadyEndpoints;
+          }
+        }
+
+        // Cross-reference backing pods by selector
+        const selector = (res.specSummary?.selector || {}) as Record<string, string>;
+        const selectorEntries = Object.entries(selector);
+        const hasSelector = selectorEntries.length > 0;
+        let matchingPodsCount = 0;
+        let readyBackingPodsCount = 0;
+        let unreadyBackingPodsCount = 0;
+        const unreadyPodDetails: Array<{ name: string; phase: string; reason?: string; waitingReason?: string }> = [];
+
+        let matchingPods: KubernetesResource[] = [];
+        if (hasSelector) {
+          matchingPods = pods.filter(pod => {
+            if ((pod.namespace || '').toLowerCase() !== (res.namespace || '').toLowerCase()) return false;
+            const podLabels = (pod.labels || {}) as Record<string, string>;
+            return selectorEntries.every(([k, v]) => podLabels[k] === v);
+          });
+          matchingPodsCount = matchingPods.length;
+          for (const p of matchingPods) {
+            const isReady = p.conditions?.some(c => c.type === 'Ready' && c.status === 'True') || p.health === 'HEALTHY';
+            if (isReady) {
+              readyBackingPodsCount++;
+            } else {
+              unreadyBackingPodsCount++;
+              const waitingReason = p.containers?.find(c => c.waitingReason)?.waitingReason;
+              unreadyPodDetails.push({
+                name: p.name,
+                phase: p.status,
+                reason: waitingReason || p.conditions?.find(c => c.type === 'Ready')?.reason,
+                waitingReason
+              });
+            }
+          }
+        }
+
+        // Check active incidents on backing pods
+        const matchingPodNames = new Set(matchingPods.map(p => p.name.toLowerCase()));
+        const backingPodIncidents = [...this.incidents.values()].filter(inc =>
+          inc.clusterId === clusterId &&
+          (inc.status === 'OPEN' || inc.status === 'IN_PROGRESS' || inc.status === 'ACKNOWLEDGED') &&
+          inc.resourceKind === 'Pod' &&
+          (inc.namespace || '').toLowerCase() === (res.namespace || '').toLowerCase() &&
+          matchingPodNames.has(inc.resourceName.toLowerCase())
+        );
+
+        res.statusSummary = {
+          ...res.statusSummary,
+          readyEndpoints: readyEndpoints !== undefined ? readyEndpoints : 0,
+          notReadyEndpoints: notReadyEndpoints !== undefined ? notReadyEndpoints : 0,
+          totalEndpoints: totalEndpoints !== undefined ? totalEndpoints : 0,
+          hasEndpointsObject: hasEndpointsObject ?? (epObj !== undefined || epSlices.length > 0),
+          hasSelector,
+          matchingPodsCount,
+          readyBackingPodsCount,
+          unreadyBackingPodsCount,
+          unreadyPodDetails,
+          backingPodIncidentCount: backingPodIncidents.length,
+          isExternalName: res.specSummary?.type === 'ExternalName' || res.statusSummary?.isExternalName === true,
+          isControlPlaneService: (res.namespace || '').toLowerCase() === 'default' && res.name.toLowerCase() === 'kubernetes',
+          isHeadless: (res.specSummary?.clusterIP as string) === 'None',
+        };
+      }
+    }
+
     // Run deterministic incident detection & auto-recovery on each resource
     for (const res of incomingResources) {
       this.evaluateResourceObservation(cluster.orgId, clusterId, cluster.name, res);

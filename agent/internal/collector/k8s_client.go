@@ -552,6 +552,38 @@ type K8sEndpoints struct {
 	} `json:"subsets"`
 }
 
+// EndpointSlices (discovery.k8s.io/v1)
+type K8sEndpointSliceList struct {
+	Items []K8sEndpointSlice `json:"items"`
+}
+
+type K8sEndpointSlice struct {
+	Metadata    K8sObjectMeta `json:"metadata"`
+	AddressType string        `json:"addressType"`
+	Endpoints   []struct {
+		Addresses  []string `json:"addresses"`
+		Conditions struct {
+			Ready       *bool `json:"ready"`
+			Serving     *bool `json:"serving"`
+			Terminating *bool `json:"terminating"`
+		} `json:"conditions"`
+		Hostname  *string `json:"hostname"`
+		NodeName  *string `json:"nodeName"`
+		TargetRef *struct {
+			Kind      string `json:"kind"`
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
+			UID       string `json:"uid"`
+		} `json:"targetRef"`
+	} `json:"endpoints"`
+	Ports []struct {
+		Name        *string `json:"name"`
+		Port        *int32  `json:"port"`
+		Protocol    *string `json:"protocol"`
+		AppProtocol *string `json:"appProtocol"`
+	} `json:"ports"`
+}
+
 // Storage: PersistentVolumes, StorageClasses
 type K8sPersistentVolumeList struct {
 	Items []K8sPersistentVolume `json:"items"`

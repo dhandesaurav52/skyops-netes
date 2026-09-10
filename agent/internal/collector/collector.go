@@ -177,8 +177,22 @@ func (c *Collector) collectFromKubernetes(ctx context.Context) {
 		c.RecordObservation(obs)
 	}
 
-	// 10. Networking: Services, Ingresses, Endpoints
-	serviceObservations, svcStat := c.collectServices(ctx, eventsMap)
+	// 10. Networking: Endpoints, EndpointSlices, Services, Ingresses
+	endpointObservations, epStat := c.collectEndpoints(ctx)
+	collectionStatus["endpoints"] = epStat
+	for _, obs := range endpointObservations {
+		c.RecordObservation(obs)
+	}
+
+	endpointSliceObservations, epsStat := c.collectEndpointSlices(ctx)
+	collectionStatus["endpointslices"] = epsStat
+	for _, obs := range endpointSliceObservations {
+		c.RecordObservation(obs)
+	}
+
+	epIndex := buildServiceEndpointIndex(endpointObservations, endpointSliceObservations)
+
+	serviceObservations, svcStat := c.collectServices(ctx, eventsMap, epIndex)
 	collectionStatus["services"] = svcStat
 	for _, obs := range serviceObservations {
 		c.RecordObservation(obs)
@@ -187,12 +201,6 @@ func (c *Collector) collectFromKubernetes(ctx context.Context) {
 	ingressObservations, ingStat := c.collectIngresses(ctx, eventsMap)
 	collectionStatus["ingresses"] = ingStat
 	for _, obs := range ingressObservations {
-		c.RecordObservation(obs)
-	}
-
-	endpointObservations, epStat := c.collectEndpoints(ctx)
-	collectionStatus["endpoints"] = epStat
-	for _, obs := range endpointObservations {
 		c.RecordObservation(obs)
 	}
 
@@ -1083,7 +1091,7 @@ func (c *Collector) collectCronJobs(ctx context.Context, eventsMap map[string][]
 	}
 }
 
-func (c *Collector) collectServices(ctx context.Context, eventsMap map[string][]EventObservation) ([]ResourceObservation, CollectionStatusItem) {
+func (c *Collector) collectServices(ctx context.Context, eventsMap map[string][]EventObservation, epIndex map[string]*ServiceEndpointSummary) ([]ResourceObservation, CollectionStatusItem) {
 	now := time.Now().UnixMilli()
 	var results []ResourceObservation
 
@@ -1124,6 +1132,38 @@ func (c *Collector) collectServices(ctx context.Context, eventsMap map[string][]
 			})
 		}
 
+		key := fmt.Sprintf("%s/%s", svc.Metadata.Namespace, svc.Metadata.Name)
+		var readyEndpoints, notReadyEndpoints, totalEndpoints int
+		hasEndpointsObject := false
+		var backingPodNames []string
+		endpointSource := "none"
+
+		if epStat, exists := epIndex[key]; exists {
+			readyEndpoints = epStat.ReadyCount
+			notReadyEndpoints = epStat.NotReadyCount
+			totalEndpoints = epStat.TotalCount
+			hasEndpointsObject = epStat.HasObject
+			backingPodNames = epStat.BackingPodNames
+			endpointSource = epStat.Source
+		}
+
+		isExternalName := svc.Spec.Type == "ExternalName"
+		isControlPlane := svc.Metadata.Namespace == "default" && svc.Metadata.Name == "kubernetes"
+
+		statusSummary := map[string]interface{}{
+			"readyEndpoints":        readyEndpoints,
+			"notReadyEndpoints":     notReadyEndpoints,
+			"totalEndpoints":        totalEndpoints,
+			"hasEndpointsObject":    hasEndpointsObject,
+			"endpointSource":        endpointSource,
+			"backingPodNames":       backingPodNames,
+			"isExternalName":        isExternalName,
+			"isControlPlaneService": isControlPlane,
+			"loadBalancer": map[string]interface{}{
+				"ingress": ingressSummary,
+			},
+		}
+
 		results = append(results, ResourceObservation{
 			ID:              svc.Metadata.UID,
 			Kind:            "Service",
@@ -1146,12 +1186,8 @@ func (c *Collector) collectServices(ctx context.Context, eventsMap map[string][]
 				"sessionAffinity":       svc.Spec.SessionAffinity,
 				"externalTrafficPolicy": svc.Spec.ExternalTrafficPolicy,
 			},
-			StatusSummary: map[string]interface{}{
-				"loadBalancer": map[string]interface{}{
-					"ingress": ingressSummary,
-				},
-			},
-			Events: eventsMap[eventKey],
+			StatusSummary: statusSummary,
+			Events:        eventsMap[eventKey],
 		})
 	}
 
@@ -1260,6 +1296,15 @@ func (c *Collector) collectIngresses(ctx context.Context, eventsMap map[string][
 	}
 }
 
+type ServiceEndpointSummary struct {
+	ReadyCount      int
+	NotReadyCount   int
+	TotalCount      int
+	HasObject       bool
+	BackingPodNames []string
+	Source          string
+}
+
 func (c *Collector) collectEndpoints(ctx context.Context) ([]ResourceObservation, CollectionStatusItem) {
 	now := time.Now().UnixMilli()
 	var results []ResourceObservation
@@ -1281,9 +1326,28 @@ func (c *Collector) collectEndpoints(ctx context.Context) ([]ResourceObservation
 
 		readyCount := 0
 		notReadyCount := 0
+		var podNames []string
+		podNameSet := make(map[string]bool)
+
 		for _, s := range ep.Subsets {
 			readyCount += len(s.Addresses)
 			notReadyCount += len(s.NotReadyAddresses)
+			for _, a := range s.Addresses {
+				if a.TargetRef != nil && a.TargetRef.Kind == "Pod" && a.TargetRef.Name != "" {
+					if !podNameSet[a.TargetRef.Name] {
+						podNameSet[a.TargetRef.Name] = true
+						podNames = append(podNames, a.TargetRef.Name)
+					}
+				}
+			}
+			for _, a := range s.NotReadyAddresses {
+				if a.TargetRef != nil && a.TargetRef.Kind == "Pod" && a.TargetRef.Name != "" {
+					if !podNameSet[a.TargetRef.Name] {
+						podNameSet[a.TargetRef.Name] = true
+						podNames = append(podNames, a.TargetRef.Name)
+					}
+				}
+			}
 		}
 
 		results = append(results, ResourceObservation{
@@ -1300,13 +1364,16 @@ func (c *Collector) collectEndpoints(ctx context.Context) ([]ResourceObservation
 			Annotations:     sanitizeAnnotations(ep.Metadata.Annotations),
 			OwnerReferences: convertOwnerReferences(ep.Metadata.OwnerReferences),
 			SpecSummary: map[string]interface{}{
-				"readyCount":    readyCount,
-				"notReadyCount": notReadyCount,
-				"subsetsCount":  len(ep.Subsets),
+				"readyCount":      readyCount,
+				"notReadyCount":   notReadyCount,
+				"subsetsCount":    len(ep.Subsets),
+				"backingPodNames": podNames,
 			},
 			StatusSummary: map[string]interface{}{
 				"readyAddresses":    readyCount,
 				"notReadyAddresses": notReadyCount,
+				"totalEndpoints":    readyCount + notReadyCount,
+				"backingPodNames":   podNames,
 			},
 		})
 	}
@@ -1317,6 +1384,149 @@ func (c *Collector) collectEndpoints(ctx context.Context) ([]ResourceObservation
 		ObservedAt: now,
 		StatusCode: status,
 	}
+}
+
+func (c *Collector) collectEndpointSlices(ctx context.Context) ([]ResourceObservation, CollectionStatusItem) {
+	now := time.Now().UnixMilli()
+	var results []ResourceObservation
+
+	var sliceList K8sEndpointSliceList
+	status, err := c.k8sClient.GetJSONWithStatus(ctx, "/apis/discovery.k8s.io/v1/endpointslices", &sliceList)
+	if err != nil {
+		slog.Debug("EndpointSlices collection notice", "status", status, "error", err)
+		return results, CollectionStatusItem{
+			Success:    false,
+			ObservedAt: now,
+			StatusCode: status,
+			Error:      err.Error(),
+		}
+	}
+
+	for _, slice := range sliceList.Items {
+		createdTs := parseCreationTimestamp(slice.Metadata.CreationTimestamp)
+
+		readyCount := 0
+		notReadyCount := 0
+		var podNames []string
+		podNameSet := make(map[string]bool)
+
+		for _, ep := range slice.Endpoints {
+			isReady := ep.Conditions.Ready == nil || *ep.Conditions.Ready
+			if isReady {
+				readyCount += len(ep.Addresses)
+			} else {
+				notReadyCount += len(ep.Addresses)
+			}
+
+			if ep.TargetRef != nil && ep.TargetRef.Kind == "Pod" && ep.TargetRef.Name != "" {
+				if !podNameSet[ep.TargetRef.Name] {
+					podNameSet[ep.TargetRef.Name] = true
+					podNames = append(podNames, ep.TargetRef.Name)
+				}
+			}
+		}
+
+		svcName := slice.Metadata.Labels["kubernetes.io/service-name"]
+		if svcName == "" {
+			svcName = slice.Metadata.Name
+		}
+
+		results = append(results, ResourceObservation{
+			ID:              slice.Metadata.UID,
+			Kind:            "EndpointSlice",
+			Namespace:       slice.Metadata.Namespace,
+			Name:            slice.Metadata.Name,
+			Status:          fmt.Sprintf("%d ready", readyCount),
+			Health:          "HEALTHY",
+			CreatedAt:       createdTs,
+			UpdatedAt:       now,
+			ObservedAt:      now,
+			Labels:          slice.Metadata.Labels,
+			Annotations:     sanitizeAnnotations(slice.Metadata.Annotations),
+			OwnerReferences: convertOwnerReferences(slice.Metadata.OwnerReferences),
+			SpecSummary: map[string]interface{}{
+				"serviceName":     svcName,
+				"addressType":     slice.AddressType,
+				"readyCount":      readyCount,
+				"notReadyCount":   notReadyCount,
+				"endpointCount":   len(slice.Endpoints),
+				"backingPodNames": podNames,
+			},
+			StatusSummary: map[string]interface{}{
+				"readyEndpoints":    readyCount,
+				"notReadyEndpoints": notReadyCount,
+				"totalEndpoints":    readyCount + notReadyCount,
+				"backingPodNames":   podNames,
+			},
+		})
+	}
+
+	return results, CollectionStatusItem{
+		Success:    true,
+		Count:      len(results),
+		ObservedAt: now,
+		StatusCode: status,
+	}
+}
+
+func buildServiceEndpointIndex(endpoints []ResourceObservation, endpointSlices []ResourceObservation) map[string]*ServiceEndpointSummary {
+	idx := make(map[string]*ServiceEndpointSummary)
+
+	for _, ep := range endpoints {
+		key := fmt.Sprintf("%s/%s", ep.Namespace, ep.Name)
+		ready, _ := ep.SpecSummary["readyCount"].(int)
+		notReady, _ := ep.SpecSummary["notReadyCount"].(int)
+		var podNames []string
+		if names, ok := ep.SpecSummary["backingPodNames"].([]string); ok {
+			podNames = names
+		}
+		idx[key] = &ServiceEndpointSummary{
+			ReadyCount:      ready,
+			NotReadyCount:   notReady,
+			TotalCount:      ready + notReady,
+			HasObject:       true,
+			BackingPodNames: podNames,
+			Source:          "Endpoints",
+		}
+	}
+
+	for _, slice := range endpointSlices {
+		svcName, _ := slice.SpecSummary["serviceName"].(string)
+		if svcName == "" {
+			svcName = slice.Name
+		}
+		key := fmt.Sprintf("%s/%s", slice.Namespace, svcName)
+		ready, _ := slice.SpecSummary["readyCount"].(int)
+		notReady, _ := slice.SpecSummary["notReadyCount"].(int)
+		var podNames []string
+		if names, ok := slice.SpecSummary["backingPodNames"].([]string); ok {
+			podNames = names
+		}
+
+		if existing, ok := idx[key]; ok {
+			// If Endpoints had 0 but EndpointSlice has discovered endpoints, prefer the slice
+			if existing.TotalCount == 0 && (ready+notReady) > 0 {
+				existing.ReadyCount = ready
+				existing.NotReadyCount = notReady
+				existing.TotalCount = ready + notReady
+				existing.BackingPodNames = podNames
+				existing.Source = "EndpointSlice"
+			} else if len(existing.BackingPodNames) == 0 && len(podNames) > 0 {
+				existing.BackingPodNames = podNames
+			}
+		} else {
+			idx[key] = &ServiceEndpointSummary{
+				ReadyCount:      ready,
+				NotReadyCount:   notReady,
+				TotalCount:      ready + notReady,
+				HasObject:       true,
+				BackingPodNames: podNames,
+				Source:          "EndpointSlice",
+			}
+		}
+	}
+
+	return idx
 }
 
 func (c *Collector) collectPVCs(ctx context.Context, eventsMap map[string][]EventObservation) ([]ResourceObservation, CollectionStatusItem) {

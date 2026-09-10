@@ -107,6 +107,7 @@ export type IncidentType =
   | 'VolumeMountFailed'
   | 'ServiceNoEndpoints'
   | 'ServiceSelectorMismatch'
+  | 'ServiceBackingPodsNotReady'
   | 'NodeNetworkUnavailable'
   | 'MissingConfigMap'
   | 'MissingSecret';
@@ -173,6 +174,11 @@ export interface TechnicalDetails {
   confidence?: 'LOW' | 'MEDIUM' | 'HIGH';
   relatedResources?: Array<{ kind: string; namespace: string; name: string; uid?: string; relationship: string }>;
   evidence?: Array<{ source: string; reason: string; message: string; timestamp?: number }>;
+  selector?: Record<string, string>;
+  matchingPodsCount?: number;
+  unreadyBackingPodsCount?: number;
+  unreadyPods?: Array<{ name: string; phase: string; reason?: string; waitingReason?: string }>;
+  [key: string]: unknown;
 }
 
 export interface Incident {

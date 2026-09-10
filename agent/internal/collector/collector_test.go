@@ -319,12 +319,28 @@ func TestCollectionWithMockK8sServer(t *testing.T) {
 
 	// Test collectServices
 	eventsMap := make(map[string][]EventObservation)
-	svcs, svcStat := col.collectServices(ctx, eventsMap)
+	epIndex := map[string]*ServiceEndpointSummary{
+		"prod/frontend-svc": {
+			ReadyCount:      2,
+			NotReadyCount:   0,
+			TotalCount:      2,
+			HasObject:       true,
+			BackingPodNames: []string{"frontend-pod-1", "frontend-pod-2"},
+			Source:          "Endpoints",
+		},
+	}
+	svcs, svcStat := col.collectServices(ctx, eventsMap, epIndex)
 	if !svcStat.Success {
 		t.Fatalf("Services collection failed: %v", svcStat.Error)
 	}
 	if len(svcs) != 1 || svcs[0].Name != "frontend-svc" {
 		t.Errorf("Unexpected svcs result: %+v", svcs)
+	}
+	if svcs[0].StatusSummary["readyEndpoints"] != 2 {
+		t.Errorf("Expected readyEndpoints=2, got %v", svcs[0].StatusSummary["readyEndpoints"])
+	}
+	if svcs[0].StatusSummary["hasEndpointsObject"] != true {
+		t.Errorf("Expected hasEndpointsObject=true, got %v", svcs[0].StatusSummary["hasEndpointsObject"])
 	}
 
 	// Test collectIngresses
@@ -412,5 +428,142 @@ func TestPartialFailureResilience(t *testing.T) {
 	}
 	if len(ings) != 0 {
 		t.Errorf("Expected 0 ings on failure, got %d", len(ings))
+	}
+}
+
+func TestEndpointsAndEndpointSlicesCollection(t *testing.T) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/v1/endpoints", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(K8sEndpointsList{
+			Items: []K8sEndpoints{
+				{
+					Metadata: K8sObjectMeta{Name: "kubernetes", Namespace: "default", UID: "ep-k8s"},
+					Subsets: []struct {
+						Addresses []struct {
+							IP        string `json:"ip"`
+							Hostname  string `json:"hostname"`
+							NodeName  string `json:"nodeName"`
+							TargetRef *struct {
+								Kind      string `json:"kind"`
+								Namespace string `json:"namespace"`
+								Name      string `json:"name"`
+							} `json:"targetRef"`
+						} `json:"addresses"`
+						NotReadyAddresses []struct {
+							IP        string `json:"ip"`
+							Hostname  string `json:"hostname"`
+							NodeName  string `json:"nodeName"`
+							TargetRef *struct {
+								Kind      string `json:"kind"`
+								Namespace string `json:"namespace"`
+								Name      string `json:"name"`
+							} `json:"targetRef"`
+						} `json:"notReadyAddresses"`
+						Ports []struct {
+							Name     string `json:"name"`
+							Port     int32  `json:"port"`
+							Protocol string `json:"protocol"`
+						} `json:"ports"`
+					}{
+						{
+							Addresses: []struct {
+								IP        string `json:"ip"`
+								Hostname  string `json:"hostname"`
+								NodeName  string `json:"nodeName"`
+								TargetRef *struct {
+									Kind      string `json:"kind"`
+									Namespace string `json:"namespace"`
+									Name      string `json:"name"`
+								} `json:"targetRef"`
+							}{
+								{IP: "192.168.1.10"},
+							},
+						},
+					},
+				},
+			},
+		})
+	})
+
+	mux.HandleFunc("/apis/discovery.k8s.io/v1/endpointslices", func(w http.ResponseWriter, r *http.Request) {
+		isReady := true
+		json.NewEncoder(w).Encode(K8sEndpointSliceList{
+			Items: []K8sEndpointSlice{
+				{
+					Metadata: K8sObjectMeta{
+						Name:      "kube-dns-abc",
+						Namespace: "kube-system",
+						UID:       "eps-dns",
+						Labels: map[string]string{
+							"kubernetes.io/service-name": "kube-dns",
+						},
+					},
+					AddressType: "IPv4",
+					Endpoints: []struct {
+						Addresses  []string `json:"addresses"`
+						Conditions struct {
+							Ready       *bool `json:"ready"`
+							Serving     *bool `json:"serving"`
+							Terminating *bool `json:"terminating"`
+						} `json:"conditions"`
+						Hostname  *string `json:"hostname"`
+						NodeName  *string `json:"nodeName"`
+						TargetRef *struct {
+							Kind      string `json:"kind"`
+							Namespace string `json:"namespace"`
+							Name      string `json:"name"`
+							UID       string `json:"uid"`
+						} `json:"targetRef"`
+					}{
+						{
+							Addresses: []string{"10.244.0.5", "10.244.0.6"},
+							Conditions: struct {
+								Ready       *bool `json:"ready"`
+								Serving     *bool `json:"serving"`
+								Terminating *bool `json:"terminating"`
+							}{
+								Ready: &isReady,
+							},
+						},
+					},
+				},
+			},
+		})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	customClient := NewCustomK8sClient(server.Client(), server.URL, "test-token")
+	cfg := &config.Config{ClusterID: "test-cluster"}
+	col := NewCollector(cfg, nil, queue.NewBoundedQueue(10), customClient)
+	ctx := context.Background()
+
+	endpoints, epStat := col.collectEndpoints(ctx)
+	if !epStat.Success || len(endpoints) != 1 {
+		t.Fatalf("Failed to collect endpoints: %+v", epStat)
+	}
+	if endpoints[0].StatusSummary["readyAddresses"] != 1 {
+		t.Errorf("Expected readyAddresses=1, got %v", endpoints[0].StatusSummary["readyAddresses"])
+	}
+
+	endpointSlices, epsStat := col.collectEndpointSlices(ctx)
+	if !epsStat.Success || len(endpointSlices) != 1 {
+		t.Fatalf("Failed to collect endpoint slices: %+v", epsStat)
+	}
+	if endpointSlices[0].StatusSummary["readyEndpoints"] != 2 {
+		t.Errorf("Expected readyEndpoints=2, got %v", endpointSlices[0].StatusSummary["readyEndpoints"])
+	}
+
+	idx := buildServiceEndpointIndex(endpoints, endpointSlices)
+	k8sSummary := idx["default/kubernetes"]
+	if k8sSummary == nil || k8sSummary.ReadyCount != 1 {
+		t.Errorf("Expected default/kubernetes ready=1, got %+v", k8sSummary)
+	}
+
+	dnsSummary := idx["kube-system/kube-dns"]
+	if dnsSummary == nil || dnsSummary.ReadyCount != 2 {
+		t.Errorf("Expected kube-system/kube-dns ready=2, got %+v", dnsSummary)
 	}
 }

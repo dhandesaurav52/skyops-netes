@@ -535,12 +535,130 @@ export class IncidentDetector {
   }
 
   private static evaluateService(resource: KubernetesResource): DetectionResult | null {
-    const endpoints = Number(resource.statusSummary?.readyEndpoints ?? resource.statusSummary?.endpoints ?? 0);
-    const selector = resource.specSummary?.selector;
-    if (endpoints === 0) {
-      return { detected: true, incidentType: selector && Object.keys(selector as object).length > 0 ? 'ServiceSelectorMismatch' : 'ServiceNoEndpoints', title: `Service ${resource.name} has no ready endpoints`, severity: 'HIGH', technicalDetails: { reason: selector ? 'NoMatchingEndpoints' : 'NoEndpoints', message: selector ? 'Service selector has no ready matching endpoints.' : 'Service has no ready endpoints.', events: resource.events } };
+    // ExternalName services never have endpoints
+    if (
+      resource.specSummary?.type === 'ExternalName' ||
+      resource.statusSummary?.isExternalName === true
+    ) {
+      return null;
     }
-    return null;
+
+    // If telemetry explicitly has not collected endpoints, do NOT guess or produce false positives
+    const statusSummary = resource.statusSummary || {};
+    const hasExplicitEndpointData =
+      statusSummary.readyEndpoints !== undefined ||
+      statusSummary.hasEndpointsObject !== undefined ||
+      statusSummary.endpoints !== undefined;
+
+    if (!hasExplicitEndpointData) {
+      return null;
+    }
+
+    const readyEndpoints = Number(statusSummary.readyEndpoints ?? statusSummary.endpoints ?? 0);
+    if (readyEndpoints > 0) {
+      return null;
+    }
+
+    // Grace period for newly created services (< 45s)
+    if (resource.createdAt && Date.now() - resource.createdAt < 45_000) {
+      return null;
+    }
+
+    const selector = resource.specSummary?.selector as Record<string, string> | undefined;
+    const hasSelector = selector && Object.keys(selector).length > 0;
+    const matchingPodsCount = Number(statusSummary.matchingPodsCount ?? 0);
+    const unreadyBackingPodsCount = Number(statusSummary.unreadyBackingPodsCount ?? 0);
+    const notReadyEndpoints = Number(statusSummary.notReadyEndpoints ?? 0);
+    const backingPodIncidentCount = Number(statusSummary.backingPodIncidentCount ?? 0);
+    const isControlPlane =
+      resource.statusSummary?.isControlPlaneService === true ||
+      ((resource.namespace || '').toLowerCase() === 'default' && resource.name.toLowerCase() === 'kubernetes');
+    const isKubeSystem = (resource.namespace || '').toLowerCase() === 'kube-system';
+
+    // Case 1: Service has a selector
+    if (hasSelector) {
+      const hasBackingPods = matchingPodsCount > 0 || notReadyEndpoints > 0;
+
+      if (hasBackingPods) {
+        // Backing pods exist, but NONE of them are ready
+        const severity: 'HIGH' | 'MEDIUM' | 'LOW' =
+          backingPodIncidentCount > 0 || isKubeSystem ? 'MEDIUM' : 'HIGH';
+
+        const unreadyPods = (statusSummary.unreadyPodDetails as any[]) || [];
+        const unreadyReasons = unreadyPods
+          .map((p) => `${p.name}: ${p.waitingReason || p.reason || p.phase}`)
+          .slice(0, 3)
+          .join(', ');
+
+        return {
+          detected: true,
+          incidentType: 'ServiceBackingPodsNotReady',
+          title: `Service ${resource.name} backing pods are not ready (${unreadyBackingPodsCount || notReadyEndpoints} unready)`,
+          severity,
+          technicalDetails: {
+            reason: 'BackingPodsNotReady',
+            message: `Service ${resource.name} matches ${matchingPodsCount || notReadyEndpoints} pod(s), but 0 are ready to receive traffic.${unreadyReasons ? ` [${unreadyReasons}]` : ''}`,
+            selector,
+            matchingPodsCount,
+            unreadyBackingPodsCount: unreadyBackingPodsCount || notReadyEndpoints,
+            unreadyPods,
+            events: resource.events,
+          },
+        };
+      } else {
+        // Truly 0 matching pods exist for this selector
+        const isOptionalKubeSystem =
+          isKubeSystem &&
+          (resource.name.toLowerCase().includes('cilium-envoy') ||
+            resource.name.toLowerCase().includes('metrics-server'));
+
+        const severity: 'HIGH' | 'MEDIUM' | 'LOW' = isOptionalKubeSystem
+          ? 'LOW'
+          : isKubeSystem
+          ? 'MEDIUM'
+          : 'HIGH';
+
+        return {
+          detected: true,
+          incidentType: 'ServiceSelectorMismatch',
+          title: `Service ${resource.name} has no matching pods for selector`,
+          severity,
+          technicalDetails: {
+            reason: 'NoMatchingPods',
+            message: `Service ${resource.name} selector does not match any existing pods in namespace ${resource.namespace || 'default'}.`,
+            selector,
+            events: resource.events,
+          },
+        };
+      }
+    }
+
+    // Case 2: Service has NO selector
+    if (isControlPlane) {
+      return {
+        detected: true,
+        incidentType: 'ServiceNoEndpoints',
+        title: `Kubernetes API Service (default/kubernetes) has no ready endpoints`,
+        severity: 'CRITICAL',
+        technicalDetails: {
+          reason: 'ControlPlaneEndpointsMissing',
+          message: `The cluster control plane API service (default/kubernetes) has 0 ready endpoints. The kube-apiserver endpoint is unreachable.`,
+          events: resource.events,
+        },
+      };
+    }
+
+    return {
+      detected: true,
+      incidentType: 'ServiceNoEndpoints',
+      title: `Service ${resource.name} has no ready endpoints`,
+      severity: isKubeSystem ? 'LOW' : 'MEDIUM',
+      technicalDetails: {
+        reason: 'NoEndpoints',
+        message: `Service ${resource.name} has no selector and 0 ready endpoints defined.`,
+        events: resource.events,
+      },
+    };
   }
 
   /**
@@ -579,8 +697,10 @@ export class IncidentDetector {
         break;
       }
       case 'ServiceNoEndpoints':
-      case 'ServiceSelectorMismatch': {
-        if (Number(resource.statusSummary?.readyEndpoints ?? resource.statusSummary?.endpoints ?? 0) > 0) return { recovered: true, reason: `Service ${resource.name} has ready endpoints` };
+      case 'ServiceSelectorMismatch':
+      case 'ServiceBackingPodsNotReady': {
+        const ready = Number(resource.statusSummary?.readyEndpoints ?? resource.statusSummary?.endpoints ?? 0);
+        if (ready > 0) return { recovered: true, reason: `Service ${resource.name} has ready endpoints (${ready} ready)` };
         break;
       }
       case 'NodeNotReady':

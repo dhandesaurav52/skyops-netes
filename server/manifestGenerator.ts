@@ -63,6 +63,7 @@ export function generateKubernetesManifest(config: ManifestConfig): string {
             'nodes/status',
             'namespaces',
             'services',
+            'endpoints',
             'persistentvolumeclaims',
             'persistentvolumes',
             'configmaps',
@@ -91,6 +92,11 @@ export function generateKubernetesManifest(config: ManifestConfig): string {
         {
           apiGroups: ['networking.k8s.io'],
           resources: ['ingresses'],
+          verbs: ['get', 'list', 'watch'],
+        },
+        {
+          apiGroups: ['discovery.k8s.io'],
+          resources: ['endpointslices'],
           verbs: ['get', 'list', 'watch'],
         },
         {

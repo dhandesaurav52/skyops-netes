@@ -121,5 +121,133 @@ test('understands healthy in-flight deployment rollout vs deadline failure', () 
 test('detects node pressure, PVC pending, and service without endpoints', () => {
   assert.equal(IncidentDetector.evaluateResource({ ...pod(), kind: 'Node', namespace: '', name: 'node-a', conditions: [{ type: 'MemoryPressure', status: 'True' }], containers: [] })?.incidentType, 'NodeMemoryPressure');
   assert.equal(IncidentDetector.evaluateResource({ ...pod(), kind: 'PersistentVolumeClaim', name: 'data', status: 'Pending', containers: [] })?.incidentType, 'PVCPending');
-  assert.equal(IncidentDetector.evaluateResource({ ...pod(), kind: 'Service', name: 'api', specSummary: { selector: { app: 'api' } }, statusSummary: { readyEndpoints: 0 }, containers: [] })?.incidentType, 'ServiceSelectorMismatch');
+});
+
+test('service health evaluation accurately distinguishes healthy, unready pods, selector mismatch, and control-plane endpoints', () => {
+  const baseService: KubernetesResource = {
+    id: 'svc-1',
+    clusterId: 'c1',
+    kind: 'Service',
+    namespace: 'default',
+    name: 'web-api',
+    status: 'Active',
+    health: 'HEALTHY',
+    createdAt: now - 120_000,
+    updatedAt: now,
+    specSummary: { selector: { app: 'web-api' }, type: 'ClusterIP' },
+    statusSummary: {},
+    conditions: [],
+    containers: [],
+    events: []
+  };
+
+  // 1. Healthy service with ready endpoints
+  const healthySvc: KubernetesResource = {
+    ...baseService,
+    statusSummary: { readyEndpoints: 2, notReadyEndpoints: 0, totalEndpoints: 2, hasEndpointsObject: true }
+  };
+  assert.equal(IncidentDetector.evaluateResource(healthySvc), null);
+
+  // 2. ExternalName service should never trigger an incident
+  const externalNameSvc: KubernetesResource = {
+    ...baseService,
+    name: 'external-db',
+    specSummary: { type: 'ExternalName', externalName: 'db.example.com' },
+    statusSummary: { readyEndpoints: 0, hasEndpointsObject: false }
+  };
+  assert.equal(IncidentDetector.evaluateResource(externalNameSvc), null);
+
+  // 3. Newly created service within grace period (< 45s) should not trigger incident
+  const newSvc: KubernetesResource = {
+    ...baseService,
+    createdAt: Date.now() - 10_000,
+    statusSummary: { readyEndpoints: 0, hasEndpointsObject: true }
+  };
+  assert.equal(IncidentDetector.evaluateResource(newSvc), null);
+
+  // 4. Service with selector where backing pods exist but are NOT ready
+  const unreadyPodsSvc: KubernetesResource = {
+    ...baseService,
+    statusSummary: {
+      readyEndpoints: 0,
+      notReadyEndpoints: 2,
+      totalEndpoints: 2,
+      matchingPodsCount: 2,
+      readyBackingPodsCount: 0,
+      unreadyBackingPodsCount: 2,
+      unreadyPodDetails: [
+        { name: 'web-api-abc', phase: 'Running', reason: 'Readiness probe failed' },
+        { name: 'web-api-def', phase: 'Pending', waitingReason: 'CrashLoopBackOff' }
+      ],
+      hasEndpointsObject: true
+    }
+  };
+  const unreadyResult = IncidentDetector.evaluateResource(unreadyPodsSvc);
+  assert.equal(unreadyResult?.detected, true);
+  assert.equal(unreadyResult?.incidentType, 'ServiceBackingPodsNotReady');
+  assert.equal(unreadyResult?.severity, 'HIGH');
+  assert.equal((unreadyResult?.technicalDetails as any).matchingPodsCount, 2);
+
+  // 5. Service with selector where 0 backing pods match selector
+  const mismatchSvc: KubernetesResource = {
+    ...baseService,
+    statusSummary: {
+      readyEndpoints: 0,
+      notReadyEndpoints: 0,
+      totalEndpoints: 0,
+      matchingPodsCount: 0,
+      readyBackingPodsCount: 0,
+      unreadyBackingPodsCount: 0,
+      hasEndpointsObject: true
+    }
+  };
+  const mismatchResult = IncidentDetector.evaluateResource(mismatchSvc);
+  assert.equal(mismatchResult?.detected, true);
+  assert.equal(mismatchResult?.incidentType, 'ServiceSelectorMismatch');
+  assert.equal(mismatchResult?.severity, 'HIGH');
+
+  // 6. Optional kube-system service (e.g. cilium-envoy) selector mismatch is LOW severity
+  const ciliumEnvoySvc: KubernetesResource = {
+    ...baseService,
+    namespace: 'kube-system',
+    name: 'cilium-envoy',
+    specSummary: { selector: { 'k8s-app': 'cilium-envoy' } },
+    statusSummary: {
+      readyEndpoints: 0,
+      notReadyEndpoints: 0,
+      matchingPodsCount: 0,
+      hasEndpointsObject: true
+    }
+  };
+  const ciliumResult = IncidentDetector.evaluateResource(ciliumEnvoySvc);
+  assert.equal(ciliumResult?.detected, true);
+  assert.equal(ciliumResult?.incidentType, 'ServiceSelectorMismatch');
+  assert.equal(ciliumResult?.severity, 'LOW');
+
+  // 7. Control plane API service (default/kubernetes) with 0 endpoints is CRITICAL
+  const k8sApiSvc: KubernetesResource = {
+    ...baseService,
+    namespace: 'default',
+    name: 'kubernetes',
+    specSummary: {}, // No selector
+    statusSummary: {
+      readyEndpoints: 0,
+      notReadyEndpoints: 0,
+      isControlPlaneService: true,
+      hasEndpointsObject: true
+    }
+  };
+  const k8sApiResult = IncidentDetector.evaluateResource(k8sApiSvc);
+  assert.equal(k8sApiResult?.detected, true);
+  assert.equal(k8sApiResult?.incidentType, 'ServiceNoEndpoints');
+  assert.equal(k8sApiResult?.severity, 'CRITICAL');
+
+  // 8. Auto-recovery when endpoints become ready
+  const recoveredService: KubernetesResource = {
+    ...baseService,
+    statusSummary: { readyEndpoints: 2 }
+  };
+  assert.equal(IncidentDetector.evaluateRecovery(recoveredService, 'ServiceNoEndpoints').recovered, true);
+  assert.equal(IncidentDetector.evaluateRecovery(recoveredService, 'ServiceSelectorMismatch').recovered, true);
+  assert.equal(IncidentDetector.evaluateRecovery(recoveredService, 'ServiceBackingPodsNotReady').recovered, true);
 });

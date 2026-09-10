@@ -221,6 +221,11 @@ export const ClusterDetailView: React.FC<ClusterDetailViewProps> = ({ clusterId,
   const degradedWorkloads = workloads.filter(
     (w) => w.health === 'CRITICAL' || w.health === 'WARNING'
   );
+  const openIncidents = incidents.filter(
+    (i) => i.status === 'OPEN' || i.status === 'IN_PROGRESS' || i.status === 'ACKNOWLEDGED'
+  );
+  const criticalIncidents = openIncidents.filter((i) => i.severity === 'CRITICAL');
+  const highIncidents = openIncidents.filter((i) => i.severity === 'HIGH');
 
   const getFilteredResources = () => {
     let list: KubernetesResource[] = [];
@@ -661,13 +666,62 @@ export const ClusterDetailView: React.FC<ClusterDetailViewProps> = ({ clusterId,
                 )}
               </div>
             </div>
+          ) : openIncidents.length > 0 ? (
+            <div className="p-5 rounded-xl bg-amber-950/20 border border-amber-900/40 space-y-4">
+              <div className="flex items-center justify-between border-b border-amber-900/40 pb-3">
+                <div className="flex items-center gap-2 text-amber-300 font-bold">
+                  <ShieldAlert className="w-4 h-4 text-amber-400 animate-pulse" />
+                  <span>
+                    ATTENTION REQUIRED: {openIncidents.length} Active Incident(s) Detected • Workloads Nominal
+                  </span>
+                </div>
+                <span className="text-[11px] text-amber-400/80">
+                  {criticalIncidents.length > 0 ? `${criticalIncidents.length} Critical` : `${highIncidents.length} High`} priority
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider">
+                  Active Incidents Impacting Infrastructure ({openIncidents.length})
+                </div>
+                <div className="divide-y divide-zinc-800/80 border border-zinc-800 rounded-lg bg-zinc-950/80 overflow-hidden">
+                  {openIncidents.slice(0, 5).map((inc) => (
+                    <div key={inc.id} className="p-2.5 flex items-center justify-between gap-2">
+                      <div className="truncate">
+                        <div className="font-bold text-zinc-200 truncate flex items-center gap-2">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                            inc.severity === 'CRITICAL' ? 'bg-rose-950 text-rose-300 border border-rose-800' :
+                            inc.severity === 'HIGH' ? 'bg-amber-950 text-amber-300 border border-amber-800' :
+                            'bg-zinc-800 text-zinc-300'
+                          }`}>
+                            {inc.severity}
+                          </span>
+                          <span>{inc.title}</span>
+                        </div>
+                        <div className="text-[10px] text-zinc-500">
+                          {inc.namespace || 'cluster-wide'} • {inc.resourceKind}/{inc.resourceName} • {inc.incidentType}
+                        </div>
+                      </div>
+                      {onSelectIncident && (
+                        <button
+                          onClick={() => onSelectIncident(inc.id)}
+                          className="px-2 py-1 text-[11px] rounded bg-zinc-900 text-zinc-200 border border-zinc-700 hover:bg-zinc-800 shrink-0"
+                        >
+                          View Incident →
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-900/40 flex items-center gap-3 text-emerald-300">
               <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
               <div>
                 <span className="font-bold block">Nominal Cluster State</span>
                 <span className="text-[11px] text-emerald-400/80">
-                  All {workloads.length} workloads and {pods.length} pods are reporting healthy lifecycles.
+                  All {workloads.length} workloads and {pods.length} pods are healthy with 0 active incidents.
                 </span>
               </div>
             </div>
