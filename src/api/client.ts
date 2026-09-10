@@ -22,6 +22,68 @@ import {
   WorkloadMetricsSummary
 } from '../types/index';
 
+/**
+ * Normalizes and validates cluster resources API responses.
+ *
+ * Requirements:
+ * - Preserves valid resource arrays unchanged (e.g. { resources: [...] } or direct [...]).
+ * - Normalizes missing resource collections (null, undefined, { resources: null/undefined }, {}) to [].
+ * - Surfaces an explicit telemetry error when the response is malformed (e.g. non-array resources, primitive payload).
+ * - Does not hide real backend errors.
+ */
+export function normalizeClusterResourcesResponse(data: unknown): KubernetesResource[] {
+  // 1. Missing payload -> normalize to empty collection []
+  if (data === null || data === undefined) {
+    return [];
+  }
+
+  // 2. Direct array response [...] -> preserve valid array unchanged
+  if (Array.isArray(data)) {
+    return data as KubernetesResource[];
+  }
+
+  // 3. Non-object primitive payload (string, number, boolean) -> malformed
+  if (typeof data !== 'object') {
+    throw new Error(`Malformed cluster resources response: received unexpected ${typeof data} payload`);
+  }
+
+  const record = data as Record<string, unknown>;
+
+  // 4. Preserve explicit backend errors without swallowing
+  if (record.error && typeof record.error === 'string') {
+    throw new Error(record.error);
+  }
+
+  // 5. Standard wrapped shape: { resources: [...] }
+  if ('resources' in record) {
+    const resCollection = record.resources;
+    if (resCollection === null || resCollection === undefined) {
+      return [];
+    }
+    if (Array.isArray(resCollection)) {
+      return resCollection as KubernetesResource[];
+    }
+    throw new Error('Malformed cluster resources response: "resources" field is not an array');
+  }
+
+  // 6. Alternative collection wrappers: { data: [...] } or { items: [...] }
+  if (Array.isArray(record.data)) {
+    return record.data as KubernetesResource[];
+  }
+  if (Array.isArray(record.items)) {
+    return record.items as KubernetesResource[];
+  }
+
+  // 7. Empty object {} -> normalize to empty collection []
+  const keys = Object.keys(record);
+  if (keys.length === 0) {
+    return [];
+  }
+
+  // 8. Unexpected object structure without any resource array -> malformed
+  throw new Error('Malformed cluster resources response: expected a resource collection array');
+}
+
 class ApiClient {
   private async getHeaders(): Promise<HeadersInit> {
     const savedOrg = localStorage.getItem('skyops_active_org_id');
@@ -182,8 +244,8 @@ class ApiClient {
   }
 
   async getClusterResources(clusterId: string): Promise<KubernetesResource[]> {
-    const data = await this.request<{ resources: KubernetesResource[] }>(`/api/v1/clusters/${clusterId}/resources`);
-    return data.resources;
+    const data = await this.request<unknown>(`/api/v1/clusters/${clusterId}/resources`);
+    return normalizeClusterResourcesResponse(data);
   }
 
   async getAllResources(filters?: {
@@ -201,8 +263,8 @@ class ApiClient {
     if (filters?.search) params.set('search', filters.search);
 
     const url = `/api/v1/resources${params.toString() ? `?${params.toString()}` : ''}`;
-    const data = await this.request<{ resources: KubernetesResource[] }>(url);
-    return data.resources;
+    const data = await this.request<unknown>(url);
+    return normalizeClusterResourcesResponse(data);
   }
 
   // --- Observability & Resource Metrics Foundation ---

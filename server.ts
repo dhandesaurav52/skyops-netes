@@ -543,8 +543,12 @@ app.get('/api/v1/clusters/:id/manifest.yaml', handleManifestDownload);
 app.get('/api/v1/clusters/:id/manifests/download', handleManifestDownload);
 
 app.get('/api/v1/clusters/:id/resources', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const cluster = store.getCluster(req.params.id, req.orgId!);
+  if (!cluster) {
+    return res.status(404).json({ error: 'Cluster not found' });
+  }
   const resources = store.getClusterResources(req.params.id, req.orgId!);
-  res.json({ resources });
+  res.json({ resources: Array.isArray(resources) ? resources : [] });
 });
 
 // --- Observability & Metrics Foundation Endpoints ---

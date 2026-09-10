@@ -70,24 +70,47 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
   const [confirmDisconnectOpen, setConfirmDisconnectOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
+  const [telemetryError, setTelemetryError] = useState<string | null>(null);
 
   const fetchDetails = async (isBackground = false) => {
     try {
       if (!isBackground) setLoading(true);
-      const [clusterRes, resourcesRes, manifestsRes, incidentsRes] = await Promise.all([
-        api.getCluster(clusterId),
-        api.getClusterResources(clusterId),
-        api.getClusterManifests(clusterId),
-        api.getIncidents({ clusterId })
+      if (!isBackground) setTelemetryError(null);
+
+      // Fetch primary cluster record, manifests, and incidents
+      const clusterPromise = api.getCluster(clusterId);
+      const manifestsPromise = api.getClusterManifests(clusterId).catch((err) => {
+        console.warn('Cluster manifests fetch notice:', err?.message || err);
+        return { connectionCode: '', manifests: {} } as unknown as AgentManifestsResponse;
+      });
+      const incidentsPromise = api.getIncidents({ clusterId }).catch((err) => {
+        console.warn('Cluster incidents fetch notice:', err?.message || err);
+        return [] as Incident[];
+      });
+
+      // Fetch cluster resources with explicit telemetry validation error capture
+      const resourcesPromise = api.getClusterResources(clusterId).catch((err) => {
+        console.error('Cluster resources telemetry fetch notice:', err);
+        setTelemetryError(err?.message || 'Failed to load telemetry resources');
+        return [] as KubernetesResource[];
+      });
+
+      const [clusterRes, manifestsRes, incidentsRes, resourcesRes] = await Promise.all([
+        clusterPromise,
+        manifestsPromise,
+        incidentsPromise,
+        resourcesPromise
       ]);
+
+      const safeResList = Array.isArray(resourcesRes) ? resourcesRes : [];
       setCluster(clusterRes);
-      setResources(resourcesRes);
+      setResources(safeResList);
       setManifestData(manifestsRes);
-      setIncidents(incidentsRes || []);
-      if (manifestsRes.connectionCode) {
+      setIncidents(Array.isArray(incidentsRes) ? incidentsRes : []);
+      if (manifestsRes?.connectionCode) {
         setInputConnectionCode(manifestsRes.connectionCode);
       }
-      return { cluster: clusterRes, resources: resourcesRes };
+      return { cluster: clusterRes, resources: safeResList };
     } catch (err: any) {
       console.error('Error fetching cluster details:', err);
       if (!isBackground) {
@@ -104,9 +127,10 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
       setManualRefreshing(true);
       setActionError(null);
       const result = await fetchDetails(false);
-      const podCount = result.resources.filter((r) => r.kind === 'Pod').length;
-      const nodeCount = result.resources.filter((r) => r.kind === 'Node').length;
-      setActionSuccess(`Telemetry refreshed: ${result.resources.length} resources loaded (${podCount} pods, ${nodeCount} nodes).`);
+      const safeResultResources = Array.isArray(result?.resources) ? result.resources : [];
+      const podCount = safeResultResources.filter((r) => r && r.kind === 'Pod').length;
+      const nodeCount = safeResultResources.filter((r) => r && r.kind === 'Node').length;
+      setActionSuccess(`Telemetry refreshed: ${safeResultResources.length} resources loaded (${podCount} pods, ${nodeCount} nodes).`);
       setTimeout(() => {
         setActionSuccess((prev) => (prev?.startsWith('Telemetry refreshed') ? null : prev));
       }, 4000);
@@ -118,9 +142,13 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
   };
 
   useEffect(() => {
-    fetchDetails(false);
+    fetchDetails(false).catch((err) => {
+      console.warn('Initial cluster load notice:', err?.message || err);
+    });
     const interval = setInterval(() => {
-      fetchDetails(true);
+      fetchDetails(true).catch((err) => {
+        console.warn('Background cluster refresh notice:', err?.message || err);
+      });
     }, 10000);
     return () => clearInterval(interval);
   }, [clusterId]);
@@ -207,26 +235,30 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
   };
 
   const workloadKinds = ['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob'];
-  const workloads = resources.filter((r) => workloadKinds.includes(r.kind));
-  const pods = resources.filter((r) => r.kind === 'Pod');
-  const nodes = resources.filter((r) => r.kind === 'Node');
-  const pvcs = resources.filter((r) => r.kind === 'PersistentVolumeClaim' || r.kind === 'PVC');
+  const safeResources = Array.isArray(resources) ? resources : [];
+  const safeIncidents = Array.isArray(incidents) ? incidents : [];
+
+  const workloads = safeResources.filter((r) => r && workloadKinds.includes(r.kind));
+  const pods = safeResources.filter((r) => r && r.kind === 'Pod');
+  const nodes = safeResources.filter((r) => r && r.kind === 'Node');
+  const pvcs = safeResources.filter((r) => r && (r.kind === 'PersistentVolumeClaim' || r.kind === 'PVC'));
   const crashingPods = pods.filter(
     (p) =>
-      p.health === 'CRITICAL' ||
-      p.status === 'CrashLoopBackOff' ||
-      p.status === 'ImagePullBackOff' ||
-      p.status === 'Failed' ||
-      p.status === 'Error'
+      p &&
+      (p.health === 'CRITICAL' ||
+        p.status === 'CrashLoopBackOff' ||
+        p.status === 'ImagePullBackOff' ||
+        p.status === 'Failed' ||
+        p.status === 'Error')
   );
   const degradedWorkloads = workloads.filter(
-    (w) => w.health === 'CRITICAL' || w.health === 'WARNING'
+    (w) => w && (w.health === 'CRITICAL' || w.health === 'WARNING')
   );
-  const openIncidents = incidents.filter(
-    (i) => i.status === 'OPEN' || i.status === 'IN_PROGRESS' || i.status === 'ACKNOWLEDGED'
+  const openIncidents = safeIncidents.filter(
+    (i) => i && (i.status === 'OPEN' || i.status === 'IN_PROGRESS' || i.status === 'ACKNOWLEDGED')
   );
-  const criticalIncidents = openIncidents.filter((i) => i.severity === 'CRITICAL');
-  const highIncidents = openIncidents.filter((i) => i.severity === 'HIGH');
+  const criticalIncidents = openIncidents.filter((i) => i && i.severity === 'CRITICAL');
+  const highIncidents = openIncidents.filter((i) => i && i.severity === 'HIGH');
 
   const getFilteredResources = () => {
     let list: KubernetesResource[] = [];
@@ -238,14 +270,16 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
     if (searchTerm) {
       const q = searchTerm.toLowerCase();
       list = list.filter(
-        (r) => r.name.toLowerCase().includes(q) || (r.namespace && r.namespace.toLowerCase().includes(q))
+        (r) => r && (r.name.toLowerCase().includes(q) || (r.namespace && r.namespace.toLowerCase().includes(q)))
       );
     }
 
     return list;
   };
 
-  const allEvents = resources.flatMap((r) => r.events || []).sort((a, b) => b.timestamp - a.timestamp);
+  const allEvents = safeResources
+    .flatMap((r) => (r && Array.isArray(r.events) ? r.events : []))
+    .sort((a, b) => ((b && b.timestamp) || 0) - ((a && a.timestamp) || 0));
 
   if (loading && !cluster) {
     return <LoadingState message="Loading cluster diagnostics..." />;
@@ -335,6 +369,18 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
             <span>{actionError}</span>
           </div>
           <button onClick={() => setActionError(null)} className="text-zinc-400 hover:text-zinc-200">
+            &times;
+          </button>
+        </div>
+      )}
+
+      {telemetryError && (
+        <div className="p-3 text-xs rounded-lg bg-amber-950/40 border border-amber-800 text-amber-300 font-mono flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>Telemetry Alert: {telemetryError}</span>
+          </div>
+          <button onClick={() => setTelemetryError(null)} className="text-zinc-400 hover:text-zinc-200">
             &times;
           </button>
         </div>
@@ -456,7 +502,7 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
         <ClusterObservabilityView
           clusterId={cluster.id}
           clusterName={cluster.name}
-          resources={resources}
+          resources={safeResources}
           onSelectResource={(r) => setSelectedResource(r)}
         />
       ) : activeTab === 'agent' ? (
@@ -834,15 +880,15 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
       ) : activeTab === 'workloads' ? (
         <WorkloadsView
           workloads={workloads}
-          clusterResources={resources}
-          incidents={incidents}
+          clusterResources={safeResources}
+          incidents={safeIncidents}
           onSelectWorkload={(w) => setSelectedResource(w)}
         />
       ) : activeTab === 'pods' ? (
         <PodsView
           pods={pods}
-          clusterResources={resources}
-          incidents={incidents}
+          clusterResources={safeResources}
+          incidents={safeIncidents}
           onSelectPod={(p) => setSelectedResource(p)}
         />
       ) : activeTab === 'nodes' ? (
@@ -953,8 +999,8 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
       {selectedResource && selectedResource.kind === 'Pod' && (
         <PodDetailModal
           pod={selectedResource}
-          clusterResources={resources}
-          incidents={incidents}
+          clusterResources={safeResources}
+          incidents={safeIncidents}
           onClose={() => setSelectedResource(null)}
           onSelectIncident={onSelectIncident}
           onSelectResource={(res) => setSelectedResource(res)}
@@ -965,8 +1011,8 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
       {selectedResource && workloadKinds.includes(selectedResource.kind) && (
         <WorkloadDetailModal
           workload={selectedResource}
-          clusterResources={resources}
-          incidents={incidents}
+          clusterResources={safeResources}
+          incidents={safeIncidents}
           onClose={() => setSelectedResource(null)}
           onSelectPod={(pod) => setSelectedResource(pod)}
           onSelectIncident={onSelectIncident}
