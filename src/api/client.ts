@@ -130,6 +130,26 @@ class ApiClient {
       throw new Error(`Network connection error: ${netErr?.message || 'Failed to communicate with SkyOps server'}`);
     }
 
+    // If unauthorized and a real Firebase user is logged in, attempt a one-time force-refresh of the ID token
+    if (res.status === 401 && auth.currentUser && !(options as any)?._isAuthRetry) {
+      try {
+        const freshToken = await auth.currentUser.getIdToken(true);
+        if (freshToken) {
+          const retryHeaders = {
+            ...headers,
+            Authorization: `Bearer ${freshToken}`
+          };
+          res = await fetch(url, {
+            ...options,
+            headers: retryHeaders,
+            ...({ _isAuthRetry: true } as any)
+          });
+        }
+      } catch (refreshErr) {
+        console.warn('[SkyOps API] Token auto-refresh on 401 error:', refreshErr);
+      }
+    }
+
     const text = await res.text();
     let data: any;
 

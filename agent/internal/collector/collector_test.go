@@ -567,3 +567,59 @@ func TestEndpointsAndEndpointSlicesCollection(t *testing.T) {
 		t.Errorf("Expected kube-system/kube-dns ready=2, got %+v", dnsSummary)
 	}
 }
+
+func TestNamespaceFiltering(t *testing.T) {
+	cfg := &config.Config{
+		ClusterID:          "cls-test",
+		ExcludedNamespaces: []string{"kube-system", "monitoring"},
+	}
+	col := NewCollector(cfg, nil, queue.NewBoundedQueue(10), nil)
+
+	if col.isNamespaceAllowed("kube-system") {
+		t.Errorf("expected kube-system to be rejected by exclusion")
+	}
+	if col.isNamespaceAllowed("monitoring") {
+		t.Errorf("expected monitoring to be rejected by exclusion")
+	}
+	if !col.isNamespaceAllowed("default") {
+		t.Errorf("expected default to be allowed")
+	}
+	// Cluster-scoped
+	if !col.isNamespaceAllowed("") {
+		t.Errorf("expected cluster-scoped (empty namespace) to always be allowed")
+	}
+
+	// Now with included namespaces
+	cfg.IncludedNamespaces = []string{"prod", "staging"}
+	if !col.isNamespaceAllowed("prod") {
+		t.Errorf("expected prod to be allowed")
+	}
+	if col.isNamespaceAllowed("default") {
+		t.Errorf("expected default to be rejected because not in IncludedNamespaces")
+	}
+}
+
+func TestResourceFiltering(t *testing.T) {
+	cfg := &config.Config{
+		ClusterID:      "cls-test",
+		WatchResources: []string{"Pod", "Deployment"},
+	}
+	col := NewCollector(cfg, nil, queue.NewBoundedQueue(10), nil)
+
+	if !col.isResourceAllowed("Pod") {
+		t.Errorf("expected Pod to be allowed")
+	}
+	if !col.isResourceAllowed("Deployment") {
+		t.Errorf("expected Deployment to be allowed")
+	}
+	if col.isResourceAllowed("DaemonSet") {
+		t.Errorf("expected DaemonSet to be disallowed")
+	}
+
+	// Empty list means all allowed
+	cfg.WatchResources = nil
+	if !col.isResourceAllowed("DaemonSet") {
+		t.Errorf("expected DaemonSet to be allowed when WatchResources is empty")
+	}
+}
+

@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/skyops-io/skyops/agent/internal/config"
+	"github.com/skyops-io/skyops/agent/internal/metrics"
+	"github.com/skyops-io/skyops/agent/internal/queue"
+	"github.com/skyops-io/skyops/agent/internal/spool"
 	"github.com/skyops-io/skyops/agent/internal/transport"
 )
 
@@ -14,6 +17,10 @@ import (
 type Service struct {
 	cfg        *config.Config
 	client     *transport.Client
+	queue      *queue.BoundedQueue
+	spool      *spool.Spool
+	metrics    *metrics.Registry
+	startTime  time.Time
 	mu         sync.RWMutex
 	nodeCount  int
 	podCount   int
@@ -27,7 +34,21 @@ func NewService(cfg *config.Config, client *transport.Client) *Service {
 		nodeCount:  0,
 		podCount:   0,
 		k8sVersion: "",
+		startTime:  time.Now(),
+		metrics:    metrics.Default,
 	}
+}
+
+func (s *Service) SetQueue(q *queue.BoundedQueue) {
+	s.queue = q
+}
+
+func (s *Service) SetSpool(sp *spool.Spool) {
+	s.spool = sp
+}
+
+func (s *Service) SetMetrics(r *metrics.Registry) {
+	s.metrics = r
 }
 
 func (s *Service) UpdateCounts(nodes, pods int) {
@@ -82,13 +103,34 @@ func (s *Service) send(ctx context.Context) {
 	k8sVer := s.k8sVersion
 	s.mu.RUnlock()
 
+	var qDepth int
+	if s.queue != nil {
+		qDepth = s.queue.Len()
+	}
+
+	var spoolBytes int64
+	if s.spool != nil {
+		_, spoolBytes = s.spool.Stats()
+	}
+
+	circuitState := "CLOSED"
+	if cb := s.client.CircuitBreaker(); cb != nil {
+		circuitState = string(cb.State())
+	}
+
 	payload := transport.HeartbeatPayload{
-		ClusterID:    s.cfg.ClusterID,
-		AgentVersion: s.cfg.AgentVersion,
-		K8sVersion:   k8sVer,
-		NodeCount:    nodes,
-		PodCount:     pods,
-		Timestamp:    time.Now().UnixMilli(),
+		ClusterID:     s.cfg.ClusterID,
+		AgentID:       s.cfg.AgentID,
+		AgentVersion:  s.cfg.AgentVersion,
+		K8sVersion:    k8sVer,
+		NodeCount:     nodes,
+		PodCount:      pods,
+		Timestamp:     time.Now().UnixMilli(),
+		UptimeSeconds: time.Since(s.startTime).Seconds(),
+		QueueDepth:    qDepth,
+		SpoolBytes:    spoolBytes,
+		CircuitState:  circuitState,
+		Capabilities:  []string{"metrics", "watches", "spooling", "remediation", "graph", "intelligence"},
 	}
 
 	if err := s.client.SendHeartbeat(ctx, payload); err != nil {
@@ -97,4 +139,3 @@ func (s *Service) send(ctx context.Context) {
 		slog.Debug("Heartbeat sent successfully", "clusterId", s.cfg.ClusterID, "nodes", nodes, "pods", pods, "k8sVersion", k8sVer)
 	}
 }
-

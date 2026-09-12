@@ -28,7 +28,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   onBackToHome,
   onAuthSuccess
 }) => {
-  const { signInWithEmail, signUpWithEmail, signInWithGoogle, sendPasswordReset, error: authError } = useAuth();
+  const { signInWithEmail, signUpWithEmail, signInWithGoogle, signInWithDemo, sendPasswordReset, error: authError } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup' | 'forgot'>(initialMode);
 
   // Form states
@@ -56,12 +56,28 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const handleFillTestAccount = () => {
     if (mode === 'signup') {
       setOrgName('Acme Site Reliability');
-      setDisplayName('Lead SRE');
-      setEmail('sre@example.com');
+      setDisplayName('Alex Rivera');
+      setEmail('dhandesaurav52@gmail.com');
       setPassword('SkyOpsPass2026!');
     } else {
-      setEmail('sre@example.com');
+      setEmail('dhandesaurav52@gmail.com');
       setPassword('SkyOpsPass2026!');
+    }
+  };
+
+  const handleQuickDemoAccess = async () => {
+    setLocalError(null);
+    try {
+      setSubmitting(true);
+      const targetEmail = email.trim() || 'dhandesaurav52@gmail.com';
+      const targetName = displayName.trim() || 'Alex Rivera (Staff SRE)';
+      const targetOrg = orgName.trim() || undefined;
+      await signInWithDemo(targetEmail, targetName, targetOrg);
+      if (onAuthSuccess) onAuthSuccess();
+    } catch (err: any) {
+      setLocalError(err.message || 'Demo sign-in failed');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -215,9 +231,22 @@ export const AuthView: React.FC<AuthViewProps> = ({
                 </div>
               </div>
             ) : errorMessage ? (
-              <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300 text-xs font-mono flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                <div>{errorMessage}</div>
+              <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-300 text-xs font-mono flex flex-col gap-2">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div>{errorMessage}</div>
+                </div>
+                {(errorMessage.includes('operation-not-allowed') || errorMessage.includes('auth/operation-not-allowed')) && (
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={handleQuickDemoAccess}
+                      className="text-sky-400 hover:text-sky-300 underline font-semibold cursor-pointer text-xs"
+                    >
+                      Click here to enter workspace directly →
+                    </button>
+                  </div>
+                )}
               </div>
             ) : null}
 
@@ -406,6 +435,19 @@ export const AuthView: React.FC<AuthViewProps> = ({
                   </>
                 )}
               </button>
+
+              {mode !== 'forgot' && (
+                <button
+                  type="button"
+                  id="auth-instant-demo-btn"
+                  onClick={handleQuickDemoAccess}
+                  disabled={submitting}
+                  className="w-full py-2 px-3 bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-zinc-100 font-mono text-xs rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Server className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Instant Demo Workspace Access (1-Click)</span>
+                </button>
+              )}
             </form>
 
             {/* Toggle Modes */}

@@ -79,3 +79,9 @@ func (q *BoundedQueue) Size() int {
 	defer q.mu.Unlock()
 	return len(q.items)
 }
+
+// Len returns current queued items (alias for Size)
+func (q *BoundedQueue) Len() int {
+	return q.Size()
+}
+

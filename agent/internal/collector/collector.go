@@ -8,8 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/skyops-io/skyops/agent/internal/config"
+	"github.com/skyops-io/skyops/agent/internal/correlation"
+	"github.com/skyops-io/skyops/agent/internal/graph"
+	"github.com/skyops-io/skyops/agent/internal/intelligence"
+	"github.com/skyops-io/skyops/agent/internal/metrics"
+	"github.com/skyops-io/skyops/agent/internal/observation"
 	"github.com/skyops-io/skyops/agent/internal/queue"
+	"github.com/skyops-io/skyops/agent/internal/spool"
 	"github.com/skyops-io/skyops/agent/internal/transport"
 )
 
@@ -28,6 +35,14 @@ type Collector struct {
 	lastCollectionStatus map[string]CollectionStatusItem
 	lastObservedAt       int64
 	lastSnapshotComplete bool
+	detector             *observation.Detector
+	graph                *graph.Graph
+	correlator           *correlation.Correlator
+	spool                *spool.Spool
+	metrics              *metrics.Registry
+	lastNodeIntel        []intelligence.NodeIntelligence
+	lastIncidentSignals  []correlation.IncidentSignal
+	lastDeltas           []observation.StateChangeDelta
 }
 
 func NewCollector(cfg *config.Config, client *transport.Client, q *queue.BoundedQueue, kClient *InClusterK8sClient) *Collector {
@@ -41,17 +56,64 @@ func NewCollector(cfg *config.Config, client *transport.Client, q *queue.Bounded
 		}
 	}
 
+	g := graph.NewGraph()
 	return &Collector{
 		cfg:                  cfg,
 		client:               client,
 		queue:                q,
 		k8sClient:            kClient,
 		lastCollectionStatus: make(map[string]CollectionStatusItem),
+		detector:             observation.NewDetector(),
+		graph:                g,
+		correlator:           correlation.NewCorrelator(g),
+		metrics:              metrics.Default,
 	}
 }
 
 func (c *Collector) SetStateUpdater(updater StateUpdater) {
 	c.stateUpdater = updater
+}
+
+func (c *Collector) SetSpool(sp *spool.Spool) {
+	c.spool = sp
+}
+
+func (c *Collector) SetMetrics(m *metrics.Registry) {
+	c.metrics = m
+}
+
+func (c *Collector) isNamespaceAllowed(ns string) bool {
+	if ns == "" {
+		return true // Cluster-scoped resources (e.g. Node, StorageClass, PV) are always allowed
+	}
+	// Check excluded namespaces
+	for _, excl := range c.cfg.ExcludedNamespaces {
+		if strings.EqualFold(strings.TrimSpace(excl), ns) {
+			return false
+		}
+	}
+	// Check included namespaces (if specified, must match)
+	if len(c.cfg.IncludedNamespaces) > 0 {
+		for _, incl := range c.cfg.IncludedNamespaces {
+			if strings.EqualFold(strings.TrimSpace(incl), ns) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func (c *Collector) isResourceAllowed(resType string) bool {
+	if len(c.cfg.WatchResources) == 0 {
+		return true
+	}
+	for _, r := range c.cfg.WatchResources {
+		if strings.EqualFold(strings.TrimSpace(r), resType) {
+			return true
+		}
+	}
+	return false
 }
 
 // Start begins the scrape loop and periodic telemetry dispatcher
@@ -281,12 +343,76 @@ func (c *Collector) collectFromKubernetes(ctx context.Context) {
 		c.RecordObservation(obs)
 	}
 
+	// Aggregate all observations for graph, change detection, and intelligence
+	allObservations := make([]ResourceObservation, 0, len(nodeObservations)+len(podObservations)+len(deploymentObservations))
+	allObservations = append(allObservations, nodeObservations...)
+	allObservations = append(allObservations, podObservations...)
+	allObservations = append(allObservations, deploymentObservations...)
+	allObservations = append(allObservations, statefulSetObservations...)
+	allObservations = append(allObservations, daemonSetObservations...)
+	allObservations = append(allObservations, jobObservations...)
+	allObservations = append(allObservations, cronJobObservations...)
+	allObservations = append(allObservations, serviceObservations...)
+	allObservations = append(allObservations, endpointSliceObservations...)
+	allObservations = append(allObservations, ingressObservations...)
+	allObservations = append(allObservations, pvcObservations...)
+	allObservations = append(allObservations, pvObservations...)
+	allObservations = append(allObservations, scObservations...)
+	allObservations = append(allObservations, cmObservations...)
+	allObservations = append(allObservations, secObservations...)
+	allObservations = append(allObservations, nsObservations...)
+	allObservations = append(allObservations, rqObservations...)
+	allObservations = append(allObservations, lrObservations...)
+	allObservations = append(allObservations, saObservations...)
+	allObservations = append(allObservations, rbObservations...)
+	allObservations = append(allObservations, crbObservations...)
+	allObservations = append(allObservations, helmObservations...)
+
+	// Update cluster relationship graph
+	if c.graph != nil {
+		c.graph.BuildFromObservations(allObservations)
+	}
+
+	// Detect changes against prior baseline
+	if c.detector != nil {
+		c.lastDeltas = c.detector.DetectChanges(allObservations)
+	}
+
+	// Correlate events with resources to produce deterministic incident signals
+	if c.correlator != nil {
+		var rawEvents []EventObservation
+		for _, evList := range eventsMap {
+			rawEvents = append(rawEvents, evList...)
+		}
+		c.lastIncidentSignals = c.correlator.Correlate(allObservations, rawEvents)
+	}
+
+	// Compute deep Node Intelligence
+	var podObsPtrs []*ResourceObservation
+	for i := range podObservations {
+		podObsPtrs = append(podObsPtrs, &podObservations[i])
+	}
+	var nodeIntelList []intelligence.NodeIntelligence
+	for i := range nodeObservations {
+		nodeIntel := intelligence.AnalyzeNode(&nodeObservations[i], podObsPtrs)
+		nodeIntelList = append(nodeIntelList, nodeIntel)
+	}
+	c.lastNodeIntel = nodeIntelList
+
 	// Snapshot is complete if core infrastructure (nodes, pods, deployments) succeeded
 	c.lastSnapshotComplete = nodeStat.Success && podStat.Success && depStat.Success
 	c.lastCollectionStatus = collectionStatus
 
 	nodeCount := len(nodeObservations)
 	podCount := len(podObservations)
+
+	// Update Prometheus metrics
+	if c.metrics != nil {
+		c.metrics.Gauge("skyops_agent_nodes_count").Set(int64(nodeCount), nil)
+		c.metrics.Gauge("skyops_agent_pods_count").Set(int64(podCount), nil)
+		c.metrics.Gauge("skyops_agent_collection_duration_ms").Set(time.Now().UnixMilli()-cycleStart, nil)
+		c.metrics.Counter("skyops_agent_objects_collected_total").Add(int64(len(allObservations)), nil)
+	}
 
 	// Update heartbeat state if registered
 	if c.stateUpdater != nil {
@@ -2328,21 +2454,85 @@ func (c *Collector) flushQueue(ctx context.Context) {
 		return
 	}
 
+	batchID := uuid.New().String()
 	payload := map[string]interface{}{
 		"clusterId":        c.cfg.ClusterID,
+		"batchId":          batchID,
 		"timestamp":        time.Now().UnixMilli(),
 		"observedAt":       c.lastObservedAt,
 		"transmittedAt":    time.Now().UnixMilli(),
 		"items":            items,
 		"collectionStatus": c.lastCollectionStatus,
 		"snapshotComplete": c.lastSnapshotComplete,
+		"nodeIntelligence": c.lastNodeIntel,
+		"incidentSignals":  c.lastIncidentSignals,
+		"stateDeltas":      c.lastDeltas,
+	}
+
+	if c.metrics != nil {
+		c.metrics.Gauge("skyops_agent_queue_depth").Set(int64(c.queue.Size()), nil)
 	}
 
 	if err := c.client.SendTelemetry(ctx, payload); err != nil {
-		c.queue.RequeueFront(items)
-		slog.Warn("Failed to dispatch telemetry batch", "error", err, "itemCount", len(items))
+		slog.Warn("Failed to dispatch telemetry batch directly to backend", "error", err, "itemCount", len(items))
+
+		// If durable disk spool is configured, spool batch to prevent memory pressure or telemetry loss
+		if c.spool != nil {
+			itemsIface := make([]interface{}, len(items))
+			for i, itm := range items {
+				itemsIface[i] = itm
+			}
+			spoolBatch := &TelemetryBatch{
+				ClusterID:        c.cfg.ClusterID,
+				Timestamp:        time.Now().UnixMilli(),
+				ObservedAt:       c.lastObservedAt,
+				TransmittedAt:    time.Now().UnixMilli(),
+				Items:            itemsIface,
+				CollectionStatus: c.lastCollectionStatus,
+				SnapshotComplete: c.lastSnapshotComplete,
+			}
+			if writeErr := c.spool.WriteBatch(spoolBatch); writeErr != nil {
+				slog.Error("Failed to write batch to durable disk spool; requeueing in memory", "error", writeErr)
+				c.queue.RequeueFront(items)
+			} else {
+				slog.Info("Telemetry batch safely persisted to durable disk spool", "itemCount", len(items), "spoolDir", c.spool.Dir())
+			}
+			_, spoolBytes := c.spool.Stats()
+			if c.metrics != nil {
+				c.metrics.Gauge("skyops_agent_spool_bytes").Set(spoolBytes, nil)
+			}
+		} else {
+			c.queue.RequeueFront(items)
+		}
 	} else {
 		slog.Info("Dispatched telemetry batch", "itemCount", len(items), "clusterId", c.cfg.ClusterID, "snapshotComplete", c.lastSnapshotComplete)
+
+		// Drain any previously spooled batches upon connectivity recovery
+		if c.spool != nil {
+			c.drainSpool(ctx)
+		}
+	}
+}
+
+func (c *Collector) drainSpool(ctx context.Context) {
+	for {
+		batch, filePath, err := c.spool.ReadOldestBatch()
+		if err != nil {
+			break // Spool empty or unreadable
+		}
+
+		if err := c.client.SendTelemetry(ctx, batch); err != nil {
+			slog.Warn("Failed to drain spooled batch to backend; pausing spool drain", "file", filePath, "error", err)
+			break
+		}
+
+		_ = c.spool.AckBatch(filePath)
+		slog.Info("Successfully uploaded and pruned spooled telemetry batch", "file", filePath)
+	}
+
+	if c.metrics != nil && c.spool != nil {
+		_, spoolBytes := c.spool.Stats()
+		c.metrics.Gauge("skyops_agent_spool_bytes").Set(spoolBytes, nil)
 	}
 }
 
