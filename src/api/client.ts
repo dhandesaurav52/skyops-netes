@@ -470,6 +470,8 @@ class ApiClient {
       | 'NodeNotReady'
       | 'DeploymentDegraded'
       | 'PVCPending'
+      | 'HighCPUPayments'
+      | 'HighCPU'
       | 'RecoverAll'
   ): Promise<{ success: boolean; message: string; incidentId?: string }> {
     return this.request<{ success: boolean; message: string; incidentId?: string }>('/api/v1/dev/simulate-scenario', {
@@ -574,6 +576,45 @@ class ApiClient {
     return this.request(`/api/v1/clusters/${clusterId}/revoke-token`, {
       method: 'POST'
     });
+  }
+
+  // --- Incident Email Notifications Settings ---
+  async getNotificationSettings(): Promise<{
+    incidentEmailEnabled: boolean;
+    email: string;
+    updatedAt?: number;
+    sender: string;
+  }> {
+    return this.request('/api/v1/settings/notifications');
+  }
+
+  async updateNotificationSettings(incidentEmailEnabled: boolean): Promise<{
+    incidentEmailEnabled: boolean;
+    email: string;
+    updatedAt?: number;
+    sender: string;
+  }> {
+    return this.request('/api/v1/settings/notifications', {
+      method: 'PUT',
+      body: JSON.stringify({ incidentEmailEnabled })
+    });
+  }
+
+  async sendTestNotification(): Promise<{
+    success: boolean;
+    messageId?: string;
+    error?: string;
+    recipient: string;
+    sender: string;
+    timestamp: number;
+  }> {
+    return this.request('/api/v1/settings/notifications/test', {
+      method: 'POST'
+    });
+  }
+
+  async getNotificationDeliveries(): Promise<{ deliveries: any[] }> {
+    return this.request('/api/v1/settings/notifications/deliveries');
   }
 }
 

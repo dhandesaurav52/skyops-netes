@@ -24,6 +24,7 @@ import {
   StructuredRemediation,
   TimelineEvent,
   User,
+  UserNotificationSettings,
   ClusterObservabilityMetrics,
   MetricHistoryPoint,
   NodeMetricsSummary,
@@ -40,11 +41,13 @@ import {
 } from './metrics';
 import { auditService } from './audit';
 import { webhookService } from './integrations/webhooks';
+import { incidentNotificationService } from './notifications/notificationService';
 import { systemObservability } from './observability/metrics';
 import { OrgUsageSummary } from './repositories/types';
 
 export class DataStore {
   private users: Map<string, User> = new Map();
+  private userNotificationSettings: Map<string, UserNotificationSettings> = new Map(); // userId -> settings
   private orgs: Map<string, Organization> = new Map();
   private members: Map<string, OrgMember[]> = new Map(); // orgId -> members
   private clusters: Map<string, Cluster> = new Map(); // clusterId -> cluster
@@ -95,6 +98,7 @@ export class DataStore {
         if (data.policies) this.policies = new Map(Object.entries(data.policies));
         if (data.incidentFailures) this.incidentFailures = new Map(Object.entries(data.incidentFailures));
         if (data.incidentCounter) this.incidentCounter = data.incidentCounter;
+        if (data.userNotificationSettings) this.userNotificationSettings = new Map(Object.entries(data.userNotificationSettings));
 
         // Clean up any historical false-positive incidents generated against the SkyOps telemetry agent
         for (const [id, inc] of Array.from(this.incidents.entries())) {
@@ -142,7 +146,8 @@ export class DataStore {
           aiAnalyses: Object.fromEntries(this.aiAnalyses),
           policies: Object.fromEntries(this.policies),
           incidentFailures: Object.fromEntries(this.incidentFailures),
-          incidentCounter: this.incidentCounter
+          incidentCounter: this.incidentCounter,
+          userNotificationSettings: Object.fromEntries(this.userNotificationSettings)
         };
         fs.writeFileSync(this.storagePath, JSON.stringify(data, null, 2), 'utf8');
       } catch (err) {
@@ -243,6 +248,34 @@ export class DataStore {
     return this.users.get(userId) || null;
   }
 
+  public getUserNotificationSettings(userId: string, email: string): UserNotificationSettings {
+    const existing = this.userNotificationSettings.get(userId);
+    if (existing) {
+      return {
+        ...existing,
+        email
+      };
+    }
+    const defaultSettings: UserNotificationSettings = {
+      incidentEmailEnabled: false,
+      email,
+      updatedAt: Date.now()
+    };
+    this.userNotificationSettings.set(userId, defaultSettings);
+    return defaultSettings;
+  }
+
+  public updateUserNotificationSettings(userId: string, email: string, enabled: boolean): UserNotificationSettings {
+    const updated: UserNotificationSettings = {
+      incidentEmailEnabled: enabled,
+      email,
+      updatedAt: Date.now()
+    };
+    this.userNotificationSettings.set(userId, updated);
+    this.saveSnapshot();
+    return updated;
+  }
+
   public getOrganizationsForUser(userId: string, userEmail?: string): Organization[] {
     const userOrgs: Organization[] = [];
     const normalizedEmail = userEmail?.trim().toLowerCase();
@@ -308,6 +341,14 @@ export class DataStore {
 
     this.saveSnapshot();
     return org;
+  }
+
+  public getOrganization(orgId: string): Organization | null {
+    return this.orgs.get(orgId) || null;
+  }
+
+  public getOrg(orgId: string): Organization | null {
+    return this.orgs.get(orgId) || null;
   }
 
   public getOrgMembers(orgId: string): OrgMember[] {
@@ -2488,6 +2529,10 @@ export class DataStore {
       });
 
       this.updateClusterIncidentCount(clusterId);
+
+      // Non-blocking incident email notifications dispatch
+      this.dispatchIncidentNotifications(newIncident);
+
       return newIncident;
     }
 
@@ -2543,6 +2588,49 @@ export class DataStore {
       });
     }
     return true;
+  }
+
+  /**
+   * Dispatch non-blocking incident email notification to authenticated organization users
+   * who have enabled: Settings -> Notifications -> Incident Email Notifications = ON.
+   * Email failure or delay never impedes or blocks incident creation.
+   */
+  public dispatchIncidentNotifications(incident: Incident): void {
+    try {
+      const org = this.getOrg(incident.orgId);
+      const members = this.getOrgMembers(incident.orgId);
+      const recipients = members.map((m) => {
+        const settings = this.getUserNotificationSettings(m.userId, m.email);
+        return {
+          userId: m.userId,
+          email: m.email,
+          name: m.name,
+          incidentEmailEnabled: settings.incidentEmailEnabled
+        };
+      });
+
+      const aiAnalysis = this.aiAnalyses.get(incident.id);
+      const remediation = this.remediations.get(incident.id);
+
+      incidentNotificationService
+        .dispatchIncidentNotification(incident, {
+          orgName: org?.name || 'SkyOps Organization',
+          recipients,
+          aiAnalysis,
+          remediationState: remediation
+            ? {
+                status: remediation.status,
+                actionType: remediation.actionType,
+                summary: remediation.reasoning?.summary || remediation.actionType
+              }
+            : undefined
+        })
+        .catch((err) => {
+          console.error('[NotificationService] Non-blocking email dispatch error:', err);
+        });
+    } catch (err) {
+      console.error('[NotificationService] Error preparing incident notifications:', err);
+    }
   }
 
   private updateClusterIncidentCount(clusterId: string) {
@@ -3071,6 +3159,8 @@ export class DataStore {
       | 'NodeNotReady'
       | 'DeploymentDegraded'
       | 'PVCPending'
+      | 'HighCPUPayments'
+      | 'HighCPU'
       | 'RecoverAll'
   ): { success: boolean; message: string; incidentId?: string } {
     const cluster = this.getCluster(clusterId, orgId);
@@ -3407,6 +3497,60 @@ export class DataStore {
       this.syncClusterResources(clusterId, resources);
       const inc = this.evaluateResourceObservation(orgId, clusterId, cluster.name, failingPvc);
       return { success: true, message: 'Injected PVC Pending condition on postgres-data-vol-claim', incidentId: inc?.id };
+    }
+
+    if (scenario === 'HighCPUPayments' || scenario === 'HighCPU') {
+      const podName = 'payments-api-7b8f95c-k2m9x';
+      const failingPod: KubernetesResource = {
+        id: `res-${crypto.randomBytes(4).toString('hex')}`,
+        clusterId,
+        kind: 'Pod',
+        namespace: 'production',
+        name: podName,
+        status: 'Running',
+        health: 'CRITICAL',
+        createdAt: Date.now() - 3600000,
+        updatedAt: Date.now(),
+        specSummary: { nodeName: 'k8s-node-worker-01' },
+        statusSummary: { phase: 'Running', podIP: '10.244.2.88' },
+        containers: [
+          {
+            name: 'payments-api',
+            image: 'registry.skyops.io/payments/api:v1.4.2',
+            restartCount: 3,
+            ready: true,
+            state: 'running',
+            cpuUsage: '495m',
+            cpuLimit: '500m',
+            memoryUsage: '380Mi',
+            memoryLimit: '512Mi'
+          }
+        ],
+        conditions: [
+          { type: 'Ready', status: 'True' },
+          { type: 'ContainersReady', status: 'True' }
+        ],
+        events: [
+          {
+            id: `evt-${crypto.randomBytes(4).toString('hex')}`,
+            timestamp: Date.now() - 60000,
+            type: 'Warning',
+            reason: 'ResourceExhaustion',
+            objectKind: 'Pod',
+            objectName: podName,
+            namespace: 'production',
+            message: 'Container payments-api cpu usage reached 99.0% of limit (495m/500m). CPU throttling throttled 84% of execution periods.'
+          }
+        ]
+      };
+
+      const existingIndex = resources.findIndex((r) => r.name === podName && r.namespace === 'production');
+      if (existingIndex >= 0) resources[existingIndex] = failingPod;
+      else resources.push(failingPod);
+
+      this.syncClusterResources(clusterId, resources);
+      const inc = this.evaluateResourceObservation(orgId, clusterId, cluster.name, failingPod);
+      return { success: true, message: 'Injected High CPU on payments-api', incidentId: inc?.id };
     }
 
     return { success: false, message: 'Unknown scenario' };

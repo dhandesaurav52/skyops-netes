@@ -1,0 +1,88 @@
+{
+  "deliveries": [
+    {
+      "id": "del-830db9ffe4a4",
+      "incidentId": "SKY-1002",
+      "orgId": "org-production-sre",
+      "recipient": "dhandesaurav52@gmail.com",
+      "subject": "[SkyOps] High Incident — High CPU on payments-api",
+      "status": "SENT",
+      "provider": "nodemailer",
+      "messageId": "<632e00ef-77f3-80ec-bb36-792c3bc63586@gmail.com>",
+      "timestamp": 1789205603676,
+      "idempotencyKey": "SKY-1002:dhandesaurav52@gmail.com:incident_created"
+    },
+    {
+      "id": "del-58c994ec0087",
+      "incidentId": "INC-SKY-8814",
+      "orgId": "org-test-1",
+      "recipient": "dhandesaurav52@gmail.com",
+      "subject": "[SkyOps] Critical Incident — payments-api CPU exhaustion",
+      "status": "FAILED",
+      "provider": "nodemailer",
+      "error": "Simulated upstream SMTP connection timeout: ECONNREFUSED",
+      "timestamp": 1789205592429,
+      "idempotencyKey": "INC-SKY-8814:dhandesaurav52@gmail.com:incident_created"
+    },
+    {
+      "id": "del-9856a8af3149",
+      "incidentId": "INC-SKY-8812",
+      "orgId": "org-test-1",
+      "recipient": "dhandesaurav52@gmail.com",
+      "subject": "[Duplicate Suppressed] payments-api CPU exhaustion",
+      "status": "DUPLICATE_SUPPRESSED",
+      "provider": "nodemailer",
+      "messageId": "<5eaf48ce-2e32-1cb2-a96d-a9cbfc201262@gmail.com>",
+      "timestamp": 1789205592429,
+      "idempotencyKey": "INC-SKY-8812:dhandesaurav52@gmail.com:incident_created"
+    },
+    {
+      "id": "del-2b690a20df33",
+      "incidentId": "INC-SKY-8812",
+      "orgId": "org-test-1",
+      "recipient": "dhandesaurav52@gmail.com",
+      "subject": "[Duplicate Suppressed] payments-api CPU exhaustion",
+      "status": "DUPLICATE_SUPPRESSED",
+      "provider": "nodemailer",
+      "messageId": "<5eaf48ce-2e32-1cb2-a96d-a9cbfc201262@gmail.com>",
+      "timestamp": 1789205592428,
+      "idempotencyKey": "INC-SKY-8812:dhandesaurav52@gmail.com:incident_created"
+    },
+    {
+      "id": "del-f00f470c48a8",
+      "incidentId": "INC-SKY-8812",
+      "orgId": "org-test-1",
+      "recipient": "dhandesaurav52@gmail.com",
+      "subject": "[Duplicate Suppressed] payments-api CPU exhaustion",
+      "status": "DUPLICATE_SUPPRESSED",
+      "provider": "nodemailer",
+      "messageId": "<5eaf48ce-2e32-1cb2-a96d-a9cbfc201262@gmail.com>",
+      "timestamp": 1789205584523,
+      "idempotencyKey": "INC-SKY-8812:dhandesaurav52@gmail.com:incident_created"
+    },
+    {
+      "id": "del-eeddcef80aac",
+      "incidentId": "INC-SKY-8812",
+      "orgId": "org-test-1",
+      "recipient": "dhandesaurav52@gmail.com",
+      "subject": "[SkyOps] Critical Incident — payments-api CPU exhaustion",
+      "status": "SENT",
+      "provider": "nodemailer",
+      "messageId": "<5eaf48ce-2e32-1cb2-a96d-a9cbfc201262@gmail.com>",
+      "timestamp": 1789205584475,
+      "idempotencyKey": "INC-SKY-8812:dhandesaurav52@gmail.com:incident_created"
+    }
+  ],
+  "sentKeys": [
+    {
+      "key": "INC-SKY-8812:dhandesaurav52@gmail.com:incident_created",
+      "timestamp": 1789205584475,
+      "messageId": "<5eaf48ce-2e32-1cb2-a96d-a9cbfc201262@gmail.com>"
+    },
+    {
+      "key": "SKY-1002:dhandesaurav52@gmail.com:incident_created",
+      "timestamp": 1789205603676,
+      "messageId": "<632e00ef-77f3-80ec-bb36-792c3bc63586@gmail.com>"
+    }
+  ]
+}

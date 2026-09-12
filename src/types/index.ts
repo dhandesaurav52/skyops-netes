@@ -7,6 +7,23 @@ export interface User {
   avatarUrl?: string;
 }
 
+export interface UserNotificationSettings {
+  incidentEmailEnabled: boolean;
+  email: string;
+  updatedAt?: number;
+}
+
+export interface NotificationDeliveryRecord {
+  id: string;
+  incidentId: string;
+  recipient: string;
+  subject: string;
+  status: 'SENT' | 'FAILED' | 'DUPLICATE_SUPPRESSED';
+  messageId?: string;
+  error?: string;
+  timestamp: number;
+}
+
 export interface Organization {
   id: string;
   name: string;

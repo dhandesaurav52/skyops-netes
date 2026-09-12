@@ -22,7 +22,17 @@ const ConfigSchema = z.object({
   AGENT_RECOMMENDED_VERSION: z.string().default('1.5.0'),
   DEFAULT_PAGE_SIZE: z.coerce.number().default(20),
   MAX_PAGE_SIZE: z.coerce.number().default(100),
-  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info')
+  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  SKYOPS_NOTIFICATION_SENDER_EMAIL: z.string().default('skyopsnetes2000@gmail.com'),
+  SKYOPS_NOTIFICATION_SENDER_NAME: z.string().default('SkyOps'),
+  SKYOPS_SMTP_HOST: z.string().optional(),
+  SKYOPS_SMTP_PORT: z.coerce.number().optional(),
+  SKYOPS_SMTP_SECURE: z
+    .string()
+    .optional()
+    .transform((val) => val === 'true' || val === '1'),
+  SKYOPS_SMTP_USER: z.string().optional(),
+  SKYOPS_SMTP_PASS: z.string().optional()
 });
 
 export type SkyOpsConfig = z.infer<typeof ConfigSchema>;
@@ -43,7 +53,14 @@ try {
     AGENT_RECOMMENDED_VERSION: process.env.AGENT_RECOMMENDED_VERSION,
     DEFAULT_PAGE_SIZE: process.env.DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE: process.env.MAX_PAGE_SIZE,
-    LOG_LEVEL: process.env.LOG_LEVEL
+    LOG_LEVEL: process.env.LOG_LEVEL,
+    SKYOPS_NOTIFICATION_SENDER_EMAIL: process.env.SKYOPS_NOTIFICATION_SENDER_EMAIL,
+    SKYOPS_NOTIFICATION_SENDER_NAME: process.env.SKYOPS_NOTIFICATION_SENDER_NAME,
+    SKYOPS_SMTP_HOST: process.env.SKYOPS_SMTP_HOST,
+    SKYOPS_SMTP_PORT: process.env.SKYOPS_SMTP_PORT,
+    SKYOPS_SMTP_SECURE: process.env.SKYOPS_SMTP_SECURE,
+    SKYOPS_SMTP_USER: process.env.SKYOPS_SMTP_USER,
+    SKYOPS_SMTP_PASS: process.env.SKYOPS_SMTP_PASS
   });
 } catch (err) {
   console.error('[SkyOps Configuration] Fatal Configuration Validation Error:', err);
@@ -57,7 +74,9 @@ try {
     AGENT_RECOMMENDED_VERSION: '1.5.0',
     DEFAULT_PAGE_SIZE: 20,
     MAX_PAGE_SIZE: 100,
-    LOG_LEVEL: 'info'
+    LOG_LEVEL: 'info',
+    SKYOPS_NOTIFICATION_SENDER_EMAIL: 'skyopsnetes2000@gmail.com',
+    SKYOPS_NOTIFICATION_SENDER_NAME: 'SkyOps'
   };
 }
 

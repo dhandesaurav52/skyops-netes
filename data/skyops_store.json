@@ -115,6 +115,15 @@
         "role": "OWNER",
         "joinedAt": 1789035622895
       }
+    ],
+    "org-production-sre": [
+      {
+        "userId": "user_test_123",
+        "email": "dhandesaurav52@gmail.com",
+        "name": "Saurav Dhande",
+        "role": "OWNER",
+        "joinedAt": 1789205603665
+      }
     ]
   },
   "clusters": {
@@ -293,6 +302,31 @@
       "openIncidentCount": 0,
       "createdAt": 1788336646135,
       "agentToken": "sky_agent_4e3ed048247fa4b3d958f1b0bc7bfabc4ac5299a5e5c4485"
+    },
+    "cls-b1afcab85567": {
+      "id": "cls-b1afcab85567",
+      "orgId": "org-production-sre",
+      "name": "production-us-east-1",
+      "description": "",
+      "status": "WARNING",
+      "agentStatus": "CONNECTED",
+      "connectionState": "connected",
+      "connectionCode": "SKYOPS-W95H-LKRU",
+      "connectionCodeExpiresAt": 1789206503665,
+      "installKey": "sky_inst_5e87447ac43eb0eb6940b8726eae2304eccb1c62",
+      "installKeyExpiresAt": 1789209203665,
+      "nodeCount": 0,
+      "podCount": 1,
+      "openIncidentCount": 1,
+      "createdAt": 1789205603665,
+      "agentToken": "sky_agent_7dff45704b9ef8cdecc7d5a0372633765926d84addb24d93",
+      "lastHeartbeat": 1789205603666,
+      "lastHeartbeatAt": 1789205603666,
+      "lastSeenAt": 1789205603666,
+      "connectedAt": 1789205603666,
+      "agentVersion": "v1.5.0",
+      "k8sVersion": "v1.35.1",
+      "connectionStatus": "connected"
     }
   },
   "clusterTokens": {
@@ -327,6 +361,10 @@
     "f237ca582660dfde87fdaf9523d4f2991c1992fe245d20c6057c170d5d39ce7f": {
       "clusterId": "cls-91a80cb2a4a5",
       "orgId": "org-85197e5f1bd6"
+    },
+    "330930058582e8fbce0137865584c52c76fb2d8601dd54cea5db964ade9dd3c6": {
+      "clusterId": "cls-b1afcab85567",
+      "orgId": "org-production-sre"
     }
   },
   "resources": {
@@ -1148,7 +1186,62 @@
     ],
     "cls-ea233f047272": [],
     "cls-603f23ba3c5a": [],
-    "cls-91a80cb2a4a5": []
+    "cls-91a80cb2a4a5": [],
+    "cls-b1afcab85567": [
+      {
+        "id": "res-66a4c91d",
+        "clusterId": "cls-b1afcab85567",
+        "kind": "Pod",
+        "namespace": "production",
+        "name": "payments-api-7b8f95c-k2m9x",
+        "status": "Running",
+        "health": "CRITICAL",
+        "createdAt": 1789202003666,
+        "updatedAt": 1789205603666,
+        "specSummary": {
+          "nodeName": "k8s-node-worker-01"
+        },
+        "statusSummary": {
+          "phase": "Running",
+          "podIP": "10.244.2.88"
+        },
+        "containers": [
+          {
+            "name": "payments-api",
+            "image": "registry.skyops.io/payments/api:v1.4.2",
+            "restartCount": 3,
+            "ready": true,
+            "state": "running",
+            "cpuUsage": "495m",
+            "cpuLimit": "500m",
+            "memoryUsage": "380Mi",
+            "memoryLimit": "512Mi"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          },
+          {
+            "type": "ContainersReady",
+            "status": "True"
+          }
+        ],
+        "events": [
+          {
+            "id": "evt-395d4e96",
+            "timestamp": 1789205543666,
+            "type": "Warning",
+            "reason": "ResourceExhaustion",
+            "objectKind": "Pod",
+            "objectName": "payments-api-7b8f95c-k2m9x",
+            "namespace": "production",
+            "message": "Container payments-api cpu usage reached 99.0% of limit (495m/500m). CPU throttling throttled 84% of execution periods."
+          }
+        ]
+      }
+    ]
   },
   "incidents": {
     "SKY-1001": {
@@ -1202,6 +1295,99 @@
         ]
       },
       "updatedAt": 1789035704914
+    },
+    "SKY-1002": {
+      "id": "SKY-1002",
+      "fingerprint": "5df76229e369aba7c245e6119ed505fc9d027345a833fac22446747f5ab6f57e",
+      "orgId": "org-production-sre",
+      "clusterId": "cls-b1afcab85567",
+      "clusterName": "production-us-east-1",
+      "namespace": "production",
+      "resourceKind": "Pod",
+      "resourceName": "payments-api-7b8f95c-k2m9x",
+      "incidentType": "CrashLoopBackOff",
+      "title": "High CPU on payments-api",
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "status": "OPEN",
+      "occurrenceCount": 2,
+      "firstSeenAt": 1789205603673,
+      "lastSeenAt": 1789205603683,
+      "technicalDetails": {
+        "podName": "payments-api-7b8f95c-k2m9x",
+        "containerName": "payments-api",
+        "image": "registry.skyops.io/payments/api:v1.4.2",
+        "restartCount": 3,
+        "reason": "ResourceExhaustion",
+        "message": "Container payments-api CPU usage reached 99.0% of limit (495m/500m). CPU throttling throttled 84% of execution periods.",
+        "nodeName": "k8s-node-worker-01",
+        "containers": [
+          {
+            "name": "payments-api",
+            "image": "registry.skyops.io/payments/api:v1.4.2",
+            "restartCount": 3,
+            "ready": true,
+            "state": "running",
+            "cpuUsage": "495m",
+            "cpuLimit": "500m",
+            "memoryUsage": "380Mi",
+            "memoryLimit": "512Mi"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          },
+          {
+            "type": "ContainersReady",
+            "status": "True"
+          }
+        ],
+        "events": [
+          {
+            "id": "evt-395d4e96",
+            "timestamp": 1789205543666,
+            "type": "Warning",
+            "reason": "ResourceExhaustion",
+            "objectKind": "Pod",
+            "objectName": "payments-api-7b8f95c-k2m9x",
+            "namespace": "production",
+            "message": "Container payments-api cpu usage reached 99.0% of limit (495m/500m). CPU throttling throttled 84% of execution periods."
+          }
+        ],
+        "impact": "The affected workload or infrastructure component is unavailable or degraded.",
+        "rootCause": "Container is repeatedly terminating with a non-zero exit code.",
+        "resourceUid": "res-66a4c91d",
+        "observedState": "Running",
+        "rootCauseCategory": "CRASH",
+        "recommendation": "Inspect container logs and the application configuration, then correct the failing process before redeploying.",
+        "recommendedAction": "Inspect container logs and the application configuration, then correct the failing process before redeploying.",
+        "confidence": "HIGH",
+        "relatedResources": [],
+        "evidence": [
+          {
+            "source": "kubernetes-status",
+            "reason": "ResourceExhaustion",
+            "message": "Container payments-api CPU usage reached 99.0% of limit (495m/500m). CPU throttling throttled 84% of execution periods."
+          },
+          {
+            "source": "kubernetes-event",
+            "reason": "ResourceExhaustion",
+            "message": "Container payments-api cpu usage reached 99.0% of limit (495m/500m). CPU throttling throttled 84% of execution periods.",
+            "timestamp": 1789205543666
+          }
+        ]
+      },
+      "updatedAt": 1789205603683,
+      "resolvedAt": null,
+      "resolutionSource": "AUTOMATIC_VERIFIED",
+      "resolution": {
+        "source": "AUTOMATIC_VERIFIED",
+        "resolvedAt": 1789205603682,
+        "reason": "Pod payments-api-7b8f95c-k2m9x is now Running and all containers are in Ready state",
+        "verificationDetails": "Authoritative telemetry verified healthy workload state"
+      }
     }
   },
   "incidentTimeline": {
@@ -1217,15 +1403,64 @@
         },
         "description": "Incident created: Deployment checkout-api is degraded (0/1 ready)"
       }
+    ],
+    "SKY-1002": [
+      {
+        "id": "evt-ca1a10da931a",
+        "incidentId": "SKY-1002",
+        "timestamp": 1789205603673,
+        "type": "DETECTION",
+        "actor": {
+          "type": "SYSTEM",
+          "name": "SkyOps Engine"
+        },
+        "description": "Incident created: High CPU on payments-api"
+      },
+      {
+        "id": "evt-86a06970672d",
+        "incidentId": "SKY-1002",
+        "timestamp": 1789205603682,
+        "type": "RECOVERY",
+        "actor": {
+          "type": "AGENT",
+          "name": "SkyOps Telemetry Engine"
+        },
+        "description": "Auto-resolved: Pod payments-api-7b8f95c-k2m9x is now Running and all containers are in Ready state",
+        "metadata": {
+          "resolutionSource": "AUTOMATIC_VERIFIED"
+        }
+      },
+      {
+        "id": "evt-c96afd483259",
+        "incidentId": "SKY-1002",
+        "timestamp": 1789205603683,
+        "type": "OCCURRENCE",
+        "actor": {
+          "type": "AGENT",
+          "name": "SkyOps Agent"
+        },
+        "description": "Incident recurred: failure condition detected again on Pod payments-api-7b8f95c-k2m9x (Occurrence #2)",
+        "metadata": {
+          "occurrenceCount": 2
+        }
+      }
     ]
   },
   "incidentNotes": {
-    "SKY-1001": []
+    "SKY-1001": [],
+    "SKY-1002": []
   },
   "remediationActions": {},
   "remediations": {},
   "aiAnalyses": {},
   "policies": {},
   "incidentFailures": {},
-  "incidentCounter": 1002
+  "incidentCounter": 1003,
+  "userNotificationSettings": {
+    "user_test_123": {
+      "incidentEmailEnabled": true,
+      "email": "dhandesaurav52@gmail.com",
+      "updatedAt": 1789205603665
+    }
+  }
 }

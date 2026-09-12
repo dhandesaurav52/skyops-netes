@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertTriangle,
+  Bell,
   Building2,
   CheckCircle2,
   Cpu,
@@ -23,6 +24,7 @@ import { api } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { Cluster } from '../../types/index';
 import { Button, CodeBlock, CopyButton } from '../common/UI';
+import { NotificationsManager } from './NotificationsManager';
 import { SystemHealthManager } from './SystemHealthManager';
 import { UsageManager } from './UsageManager';
 import { WebhooksManager } from './WebhooksManager';
@@ -33,7 +35,7 @@ interface SettingsViewProps {
   onRefresh: () => void;
 }
 
-type SettingsTab = 'org' | 'webhooks' | 'usage' | 'system' | 'testbed';
+type SettingsTab = 'org' | 'notifications' | 'webhooks' | 'usage' | 'system' | 'testbed';
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ clusters, onSelectIncident, onRefresh }) => {
   const { currentOrg, members, role, user } = useAuth();
@@ -50,6 +52,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ clusters, onSelectIn
       | 'NodeNotReady'
       | 'DeploymentDegraded'
       | 'PVCPending'
+      | 'HighCPUPayments'
       | 'RecoverAll'
   ) => {
     if (!selectedClusterId) return;
@@ -67,12 +70,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ clusters, onSelectIn
   };
 
   const scenarios: Array<{
-    id: 'CrashLoopBackOff' | 'ImagePullBackOff' | 'OOMKilled' | 'NodeNotReady' | 'DeploymentDegraded' | 'PVCPending';
+    id: 'CrashLoopBackOff' | 'ImagePullBackOff' | 'OOMKilled' | 'NodeNotReady' | 'DeploymentDegraded' | 'PVCPending' | 'HighCPUPayments';
     name: string;
     description: string;
     icon: React.ReactNode;
     severity: string;
   }> = [
+    {
+      id: 'HighCPUPayments',
+      name: 'High CPU on payments-api',
+      description: 'Simulates 99% CPU throttling exhaustion on payments-api container triggering incident email alerts.',
+      icon: <Cpu className="w-4 h-4 text-amber-400" />,
+      severity: 'HIGH'
+    },
     {
       id: 'CrashLoopBackOff',
       name: 'Pod CrashLoopBackOff',
@@ -132,6 +142,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ clusters, onSelectIn
         <div className="flex items-center gap-2 mt-5 border-b border-zinc-800 -mb-5 pb-px overflow-x-auto">
           {[
             { id: 'org', label: 'Organization & Team', icon: <Building2 className="w-3.5 h-3.5" /> },
+            { id: 'notifications', label: 'Notifications', icon: <Bell className="w-3.5 h-3.5" /> },
             { id: 'webhooks', label: 'Webhooks & Integrations', icon: <Webhook className="w-3.5 h-3.5" /> },
             { id: 'usage', label: 'Usage & Quotas', icon: <CreditCard className="w-3.5 h-3.5" /> },
             { id: 'system', label: 'System Health Probes', icon: <HeartPulse className="w-3.5 h-3.5" /> },
@@ -221,6 +232,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ clusters, onSelectIn
           </div>
         </div>
       )}
+
+      {/* Tab: Incident Email Notifications */}
+      {activeTab === 'notifications' && <NotificationsManager />}
 
       {/* Tab 2: Webhooks & Integrations */}
       {activeTab === 'webhooks' && <WebhooksManager />}

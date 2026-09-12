@@ -26,6 +26,7 @@ import {
 } from './server/manifestGenerator';
 import { normalizeTelemetry } from './server/normalization';
 import { store } from './server/store';
+import { incidentNotificationService } from './server/notifications/notificationService';
 import { skyOpsAIService } from './server/ai/service';
 import { SkyOpsIntelligenceEngine } from './server/engine/intelligence';
 import { AGENT_DEFAULT_NAMESPACE, AGENT_VERSION } from './src/config/version';
@@ -1454,6 +1455,97 @@ app.post('/api/v1/dev/simulate-scenario', requireUserAuth, requireOrgMembership,
 
   const result = store.simulateScenario(req.orgId!, clusterId, scenario);
   res.json(result);
+});
+
+// ==========================================
+// NOTIFICATION SETTINGS & AUDIT ROUTES
+// ==========================================
+app.get('/api/v1/settings/notifications', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const user = req.user!;
+  const settings = store.getUserNotificationSettings(user.id, user.email);
+  res.json({
+    incidentEmailEnabled: settings.incidentEmailEnabled,
+    email: user.email,
+    updatedAt: settings.updatedAt,
+    sender: incidentNotificationService.getSender()
+  });
+});
+
+app.put('/api/v1/settings/notifications', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const schema = z.object({
+    incidentEmailEnabled: z.boolean()
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    return sendApiError(res, 400, 'INVALID_REQUEST', 'Field incidentEmailEnabled (boolean) is required');
+  }
+
+  const user = req.user!;
+  const updated = store.updateUserNotificationSettings(user.id, user.email, parsed.data.incidentEmailEnabled);
+
+  auditService.record({
+    orgId: req.orgId!,
+    actorId: user.id,
+    actorName: user.name,
+    actorType: 'USER',
+    action: 'integration.notifications_updated',
+    resourceType: 'INTEGRATION',
+    resourceId: user.id,
+    result: 'SUCCESS',
+    details: {
+      incidentEmailEnabled: updated.incidentEmailEnabled,
+      email: user.email
+    }
+  });
+
+  res.json({
+    incidentEmailEnabled: updated.incidentEmailEnabled,
+    email: user.email,
+    updatedAt: updated.updatedAt,
+    sender: incidentNotificationService.getSender()
+  });
+});
+
+app.post('/api/v1/settings/notifications/test', requireUserAuth, requireOrgMembership, async (req: AuthenticatedUserRequest, res) => {
+  const user = req.user!;
+  const org = store.getOrg(req.orgId!);
+  const orgName = org?.name || 'SkyOps Organization';
+
+  try {
+    const result = await incidentNotificationService.sendTestNotification(user.email, orgName, req.orgId!);
+    res.json({
+      success: result.success,
+      messageId: result.messageId,
+      error: result.error,
+      recipient: user.email,
+      sender: incidentNotificationService.getSender(),
+      timestamp: result.timestamp
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to send test notification',
+      recipient: user.email,
+      sender: incidentNotificationService.getSender()
+    });
+  }
+});
+
+app.get('/api/v1/settings/notifications/deliveries', requireUserAuth, requireOrgMembership, (req: AuthenticatedUserRequest, res) => {
+  const user = req.user!;
+  const rawDeliveries = incidentNotificationService.getDeliveries(req.orgId!, user.email);
+  // Ensure provider details are never exposed to client
+  const deliveries = rawDeliveries.map(d => ({
+    id: d.id,
+    incidentId: d.incidentId,
+    recipient: d.recipient,
+    subject: d.subject,
+    status: d.status,
+    timestamp: d.timestamp,
+    messageId: d.messageId
+  }));
+  res.json({ deliveries });
 });
 
 // --- API 404 Handler ---
