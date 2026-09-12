@@ -54,9 +54,9 @@ export type ClusterStatus =
   | 'AGENT_OFFLINE'
   | 'UNKNOWN';
 
-export type AgentStatus = 'PENDING' | 'AGENT_DETECTED' | 'WAITING_CONFIRMATION' | 'CONNECTED' | 'DEGRADED' | 'OFFLINE' | 'ERROR';
-export type ConnectionState = 'pending' | 'installing' | 'agent_detected' | 'waiting_for_confirmation' | 'connected' | 'offline' | 'error';
-export type ConnectionStatus = 'pending' | 'connecting' | 'connected' | 'disconnected' | 'error';
+export type AgentStatus = 'PENDING' | 'AGENT_DETECTED' | 'WAITING_CONFIRMATION' | 'CONNECTED' | 'RECONNECTING' | 'STALE' | 'DEGRADED' | 'OFFLINE' | 'ERROR';
+export type ConnectionState = 'pending' | 'installing' | 'agent_detected' | 'waiting_for_confirmation' | 'connected' | 'reconnecting' | 'stale' | 'offline' | 'error';
+export type ConnectionStatus = 'pending' | 'connecting' | 'connected' | 'reconnecting' | 'stale' | 'disconnected' | 'error';
 
 export interface Cluster {
   id: string;

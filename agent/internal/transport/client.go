@@ -123,8 +123,9 @@ type HeartbeatPayload struct {
 	Capabilities  []string          `json:"capabilities,omitempty"`
 	QueueDepth    int               `json:"queueDepth,omitempty"`
 	SpoolBytes    int64             `json:"spoolBytes,omitempty"`
-	CircuitState  string            `json:"circuitState,omitempty"`
-	Metrics       map[string]int64  `json:"metrics,omitempty"`
+	CircuitState    string            `json:"circuitState,omitempty"`
+	ConnectionState string            `json:"connectionState,omitempty"`
+	Metrics         map[string]int64  `json:"metrics,omitempty"`
 }
 
 // ActionTarget details the resource targeted by remediation

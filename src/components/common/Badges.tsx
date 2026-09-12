@@ -239,6 +239,14 @@ export const ClusterStatusBadge: React.FC<{ status: ClusterStatus; agentStatus?:
     label = 'WAITING CONFIRMATION';
     bg = 'bg-purple-950/40 text-purple-300 border-purple-800/60';
     dot = 'bg-purple-400 animate-pulse';
+  } else if (normalizedAgent === 'reconnecting' || normalized === 'reconnecting') {
+    label = 'RECONNECTING';
+    bg = 'bg-amber-950/40 text-amber-300 border-amber-600/70';
+    dot = 'bg-amber-400 animate-ping';
+  } else if (normalizedAgent === 'stale' || normalized === 'stale') {
+    label = 'STALE';
+    bg = 'bg-orange-950/40 text-orange-300 border-orange-700/60';
+    dot = 'bg-orange-400';
   } else if (normalized === 'connected' || normalized === 'healthy' || status === 'HEALTHY') {
     label = 'CONNECTED';
     bg = 'bg-emerald-950/40 text-emerald-300 border-emerald-700/60';

@@ -51,7 +51,7 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	slog.Info("Starting SkyOps Kubernetes Agent", "version", Version)
+	slog.Info("Starting SkyOps Kubernetes Agent", "event", "agent_started", "version", Version)
 
 	// Load configuration
 	cfg, err := config.LoadFromEnv()
@@ -142,7 +142,7 @@ func main() {
 	if regErr != nil {
 		slog.Warn("Initial registration notice (will retry via heartbeat)", "error", regErr)
 	} else if regResp != nil {
-		slog.Info("Agent registered successfully with central platform", "clusterId", regResp.ClusterID, "status", regResp.Status)
+		slog.Info("Agent registered successfully with central platform", "event", "agent_connected", "clusterId", regResp.ClusterID, "status", regResp.Status)
 		if regResp.ConnectionCode != "" {
 			printPairingBanner(regResp.ConnectionCode)
 		}
@@ -182,7 +182,7 @@ func main() {
 
 	// Wait for shutdown signal
 	<-ctx.Done()
-	slog.Info("Shutdown signal received, draining queues and gracefully terminating...")
+	slog.Info("Shutdown signal received, draining queues and gracefully terminating...", "event", "agent_shutdown")
 
 	if metricsServer != nil {
 		metricsServer.SetReady(false)
@@ -193,5 +193,5 @@ func main() {
 	defer shutdownCancel()
 
 	<-shutdownCtx.Done()
-	slog.Info("SkyOps Agent successfully exited")
+	slog.Info("SkyOps Agent successfully exited", "event", "agent_exited")
 }

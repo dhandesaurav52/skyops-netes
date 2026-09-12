@@ -391,8 +391,56 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
         </div>
       )}
 
-      {/* Cluster Handshake Pending Banner */}
-      {cluster.connectionState !== 'connected' && cluster.agentStatus !== 'CONNECTED' && (
+      {/* Connection & Reconnection Status Banners */}
+      {cluster.agentStatus === 'RECONNECTING' || cluster.connectionState === 'reconnecting' ? (
+        <div className="p-4 rounded-xl bg-amber-950/25 border border-amber-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <div className="p-2 rounded-lg bg-amber-900/40 text-amber-300 border border-amber-700/60">
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            </div>
+            <div>
+              <div className="font-semibold text-amber-200">
+                Agent Reconnecting — Automatic Recovery In Progress
+              </div>
+              <div className="text-amber-400/80 text-[11px] mt-0.5">
+                SkyOps Agent is attempting to reconnect automatically. No action or reinstallation is required.
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : cluster.agentStatus === 'STALE' || cluster.connectionState === 'stale' ? (
+        <div className="p-4 rounded-xl bg-orange-950/25 border border-orange-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <div className="p-2 rounded-lg bg-orange-900/40 text-orange-300 border border-orange-700/60">
+              <Clock className="w-4 h-4 text-orange-300" />
+            </div>
+            <div>
+              <div className="font-semibold text-orange-200">
+                Agent Status Stale — Awaiting Heartbeat
+              </div>
+              <div className="text-orange-400/80 text-[11px] mt-0.5">
+                No recent heartbeat received. The agent will attempt automatic recovery when network connectivity is restored.
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (cluster.agentStatus === 'OFFLINE' || cluster.connectionState === 'offline') && (cluster.connectedAt || cluster.lastHeartbeat) ? (
+        <div className="p-4 rounded-xl bg-zinc-900/80 border border-zinc-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <div className="p-2 rounded-lg bg-zinc-800 text-zinc-400 border border-zinc-700">
+              <Radio className="w-4 h-4 text-zinc-500" />
+            </div>
+            <div>
+              <div className="font-semibold text-zinc-200">
+                Agent Offline
+              </div>
+              <div className="text-zinc-400 text-[11px] mt-0.5">
+                The agent has not communicated for more than 3 minutes. The agent is attempting automatic recovery. No reinstallation is required.
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : !cluster.connectedAt && cluster.connectionState !== 'connected' && cluster.agentStatus !== 'CONNECTED' ? (
         <div className="p-4 rounded-xl bg-amber-950/25 border border-amber-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3 text-xs font-mono">
             <div className="p-2 rounded-lg bg-amber-900/40 text-amber-300 border border-amber-700/60">
@@ -422,7 +470,7 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
             </Button>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* Cluster Overview Stats Bar */}
       <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800/80 grid grid-cols-2 sm:grid-cols-5 gap-4 text-xs font-mono">
@@ -433,6 +481,10 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
               className={`w-2 h-2 rounded-full ${
                 cluster.agentStatus === 'CONNECTED'
                   ? 'bg-emerald-500'
+                  : cluster.agentStatus === 'RECONNECTING'
+                  ? 'bg-amber-400 animate-pulse'
+                  : cluster.agentStatus === 'STALE'
+                  ? 'bg-orange-400'
                   : cluster.agentStatus === 'DEGRADED'
                   ? 'bg-amber-500'
                   : 'bg-zinc-600'
@@ -521,7 +573,7 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
             </div>
             {canManage && (
               <div className="flex items-center gap-2">
-                {cluster.connectionState !== 'connected' && cluster.agentStatus !== 'CONNECTED' && (
+                {!cluster.connectedAt && (cluster.agentStatus === 'AGENT_DETECTED' || cluster.connectionState === 'agent_detected') && (
                   <Button
                     variant="primary"
                     size="sm"

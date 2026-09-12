@@ -191,6 +191,8 @@ export class DataStore {
         if (!cluster.lastHeartbeat) {
           cluster.agentStatus = 'OFFLINE';
           cluster.status = 'AGENT_OFFLINE';
+          cluster.connectionState = 'offline';
+          cluster.connectionStatus = 'disconnected';
           continue;
         }
 
@@ -200,12 +202,20 @@ export class DataStore {
           cluster.agentStatus = 'OFFLINE';
           cluster.status = 'AGENT_OFFLINE';
           cluster.connectionState = 'offline';
+          cluster.connectionStatus = 'disconnected';
         } else if (elapsedSeconds > 90) {
-          cluster.agentStatus = 'DEGRADED';
+          cluster.agentStatus = 'STALE';
+          cluster.connectionState = 'stale';
+          cluster.connectionStatus = 'stale';
           if (cluster.status === 'HEALTHY') cluster.status = 'WARNING';
+        } else if (elapsedSeconds > 45) {
+          cluster.agentStatus = 'RECONNECTING';
+          cluster.connectionState = 'reconnecting';
+          cluster.connectionStatus = 'reconnecting';
         } else {
           cluster.agentStatus = 'CONNECTED';
           cluster.connectionState = 'connected';
+          cluster.connectionStatus = 'connected';
           // Re-evaluate health based on incidents
           const openIncidents = Array.from(this.incidents.values()).filter(
             (i) => i.clusterId === cluster.id && (i.status === 'OPEN' || i.status === 'IN_PROGRESS' || i.status === 'ACKNOWLEDGED')
@@ -774,6 +784,26 @@ export class DataStore {
     const pods = finalResources.filter((r) => r.kind === 'Pod');
     cluster.nodeCount = nodes.length;
     cluster.podCount = pods.length;
+
+    const now = Date.now();
+    cluster.lastSeenAt = now;
+    cluster.lastHeartbeat = cluster.lastHeartbeat || now;
+    cluster.lastHeartbeatAt = cluster.lastHeartbeatAt || now;
+    cluster.connectedAt = cluster.connectedAt || now;
+    cluster.agentStatus = 'CONNECTED';
+    cluster.connectionState = 'connected';
+    cluster.connectionStatus = 'connected';
+
+    if (cluster.status === 'AGENT_OFFLINE') {
+      const openIncidents = Array.from(this.incidents.values()).filter(
+        (i) => i.clusterId === clusterId && (i.status === 'OPEN' || i.status === 'IN_PROGRESS' || i.status === 'ACKNOWLEDGED')
+      );
+      const hasCritical = openIncidents.some((i) => i.severity === 'CRITICAL');
+      const hasWarning = openIncidents.some((i) => i.severity === 'HIGH' || i.severity === 'MEDIUM');
+      if (hasCritical) cluster.status = 'CRITICAL';
+      else if (hasWarning) cluster.status = 'WARNING';
+      else cluster.status = 'HEALTHY';
+    }
 
     // Detect K8s Version from Node telemetry if present
     if (nodes.length > 0) {

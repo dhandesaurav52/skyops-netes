@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { dump } from 'js-yaml';
 import { AGENT_DEFAULT_NAMESPACE, AGENT_IMAGE_REPOSITORY, AGENT_VERSION } from '../src/config/version';
 
@@ -168,6 +169,9 @@ export function generateKubernetesManifest(config: ManifestConfig): string {
             labels: {
               'app.kubernetes.io/name': 'skyops-agent',
             },
+            annotations: {
+              'skyops.io/config-hash': crypto.createHash('sha256').update(`${config.clusterId}:${config.token}:${config.serverUrl}`).digest('hex').substring(0, 16),
+            },
           },
           spec: {
             serviceAccountName: 'skyops-agent',
@@ -177,6 +181,33 @@ export function generateKubernetesManifest(config: ManifestConfig): string {
                 name: 'skyops-agent',
                 image: `${AGENT_IMAGE_REPOSITORY}:${agentVersion}`,
                 imagePullPolicy: 'IfNotPresent',
+                ports: [
+                  {
+                    name: 'metrics',
+                    containerPort: 8080,
+                    protocol: 'TCP',
+                  },
+                ],
+                livenessProbe: {
+                  httpGet: {
+                    path: '/healthz',
+                    port: 8080,
+                  },
+                  initialDelaySeconds: 15,
+                  periodSeconds: 20,
+                  timeoutSeconds: 5,
+                  failureThreshold: 3,
+                },
+                readinessProbe: {
+                  httpGet: {
+                    path: '/readyz',
+                    port: 8080,
+                  },
+                  initialDelaySeconds: 5,
+                  periodSeconds: 10,
+                  timeoutSeconds: 5,
+                  failureThreshold: 3,
+                },
                 env: [
                   {
                     name: 'SKYOPS_CLUSTER_ID',
@@ -233,6 +264,26 @@ export function generateKubernetesManifest(config: ManifestConfig): string {
                     drop: ['ALL'],
                   },
                 },
+                volumeMounts: [
+                  {
+                    name: 'spool-data',
+                    mountPath: '/var/spool/skyops-agent',
+                  },
+                  {
+                    name: 'tmp',
+                    mountPath: '/tmp',
+                  },
+                ],
+              },
+            ],
+            volumes: [
+              {
+                name: 'spool-data',
+                emptyDir: {},
+              },
+              {
+                name: 'tmp',
+                emptyDir: {},
               },
             ],
           },
@@ -332,30 +383,90 @@ EOF_SKYOPS_MANIFEST
 log_success "Manifests successfully applied to namespace '${namespace}'"
 
 # 5. Wait for agent deployment rollout
-log_info "Waiting for SkyOps Agent deployment to become Ready (up to 90 seconds)..."
-if kubectl rollout status deployment/skyops-agent -n "${namespace}" --timeout=90s; then
-    log_success "SkyOps Agent deployment is active and running!"
-else
-    log_warn "Deployment rollout timed out or is still starting. Checking pod status..."
+log_info "Waiting for SkyOps Agent deployment rollout (up to 75 seconds)..."
+ROLLOUT_OK=true
+if ! kubectl rollout status deployment/skyops-agent -n "${namespace}" --timeout=75s; then
+    ROLLOUT_OK=false
+    log_warn "Deployment rollout did not complete within timeout. Inspecting workload status..."
 fi
 
-# 6. Verify Pod status
+# 6. Authoritative Workload Readiness & Pod Diagnostic Inspection
 POD_NAME=\$(kubectl get pods -n "${namespace}" -l app.kubernetes.io/name=skyops-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-if [ -n "\$POD_NAME" ]; then
-    POD_STATUS=\$(kubectl get pod "\$POD_NAME" -n "${namespace}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-    log_info "Agent Pod: \${BOLD}\${POD_NAME}\${NC} (Status: \${POD_STATUS})"
+
+if [ -z "\$POD_NAME" ]; then
+    log_error "No SkyOps Agent pod found scheduled in namespace '${namespace}'."
+    echo -e "\\n\${RED}======================================================================\${NC}"
+    echo -e "\${RED}\${BOLD}   SkyOps Agent Installation Failed                                   \${NC}"
+    echo -e "\${RED}======================================================================\${NC}"
+    echo -e "Reason: Kubernetes deployment controller did not schedule any pods."
+    echo -e "Diagnostic: Run 'kubectl describe deployment/skyops-agent -n ${namespace}'"
+    exit 1
 fi
 
-echo -e "\\n\${GREEN}======================================================================\${NC}"
-echo -e "\${GREEN}\${BOLD}   SkyOps Agent Installation Complete!                                \${NC}"
-echo -e "\${GREEN}======================================================================\${NC}"
-echo -e "Cluster ID:      \${BOLD}${config.clusterId}\${NC}"
-echo -e "Cluster Name:    \${BOLD}${config.clusterName}\${NC}"
-echo -e "Namespace:       \${BOLD}${namespace}\${NC}"
-echo -e "Dashboard URL:   \${CYAN}${config.serverUrl}/clusters/${config.clusterId}\${NC}"
-echo -e "\${GREEN}----------------------------------------------------------------------\${NC}"
-echo -e "To view agent logs at any time, run:"
-echo -e "  \${BOLD}kubectl logs -n ${namespace} -l app.kubernetes.io/name=skyops-agent -f\${NC}\\n"
+POD_PHASE=\$(kubectl get pod "\$POD_NAME" -n "${namespace}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+CONTAINER_READY=\$(kubectl get pod "\$POD_NAME" -n "${namespace}" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+WAITING_REASON=\$(kubectl get pod "\$POD_NAME" -n "${namespace}" -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+WAITING_MSG=\$(kubectl get pod "\$POD_NAME" -n "${namespace}" -o jsonpath='{.status.containerStatuses[0].state.waiting.message}' 2>/dev/null || echo "")
+TERMINATED_REASON=\$(kubectl get pod "\$POD_NAME" -n "${namespace}" -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || echo "")
+
+log_info "Agent Pod: \${BOLD}\${POD_NAME}\${NC} (Phase: \${POD_PHASE}, Ready: \${CONTAINER_READY})"
+
+if [ "\$POD_PHASE" = "Running" ] && [ "\$CONTAINER_READY" = "true" ]; then
+    log_success "SkyOps Agent container is healthy, passing readiness probes, and actively running."
+    echo -e "\\n\${GREEN}======================================================================\${NC}"
+    echo -e "\${GREEN}\${BOLD}   SkyOps Agent Installation Complete!                                \${NC}"
+    echo -e "\${GREEN}======================================================================\${NC}"
+    echo -e "Cluster ID:      \${BOLD}${config.clusterId}\${NC}"
+    echo -e "Cluster Name:    \${BOLD}${config.clusterName}\${NC}"
+    echo -e "Namespace:       \${BOLD}${namespace}\${NC}"
+    echo -e "Dashboard URL:   \${CYAN}${config.serverUrl}/clusters/${config.clusterId}\${NC}"
+    echo -e "\${GREEN}----------------------------------------------------------------------\${NC}"
+    echo -e "To view agent logs at any time, run:"
+    echo -e "  \${BOLD}kubectl logs -n ${namespace} -l app.kubernetes.io/name=skyops-agent -f\${NC}\\n"
+    exit 0
+fi
+
+if [ "\$POD_PHASE" = "Pending" ]; then
+    log_warn "SkyOps Agent pod is currently in Pending phase (scheduling or image acquisition in progress)."
+    echo -e "\\n\${YELLOW}======================================================================\${NC}"
+    echo -e "\${YELLOW}\${BOLD}   SkyOps Agent Installation Pending (Waiting for Cluster Readiness)  \${NC}"
+    echo -e "\${YELLOW}======================================================================\${NC}"
+    echo -e "Target Cluster:  \${BOLD}${config.clusterName}\${NC} (${config.clusterId})"
+    echo -e "Agent Pod:       \${BOLD}\${POD_NAME}\${NC} (${namespace})"
+    echo -e "Current Phase:   \${YELLOW}Pending\${NC}"
+    if [ -n "\$WAITING_REASON" ]; then
+        echo -e "Container State: \${YELLOW}\${WAITING_REASON}\${NC}\${WAITING_MSG:+ - \${WAITING_MSG}}"
+    fi
+    echo -e "\${YELLOW}----------------------------------------------------------------------\${NC}"
+    echo -e "Recent Pod Events:"
+    kubectl get events -n "${namespace}" --field-selector involvedObject.name="\${POD_NAME}" --sort-by='.metadata.creationTimestamp' 2>/dev/null | tail -n 5 || echo "  (no events available)"
+    echo -e "\${YELLOW}----------------------------------------------------------------------\${NC}"
+    echo -e "Actionable Guidance:"
+    echo -e "  • Do NOT re-run this installation command. Credentials and manifests are persisted."
+    echo -e "  • The agent will automatically connect as soon as the container image finishes downloading or scheduling clears."
+    echo -e "  • Inspect detailed status: \${BOLD}kubectl describe pod \${POD_NAME} -n ${namespace}\${NC}"
+    echo -e "  • Check cluster nodes:     \${BOLD}kubectl get nodes\${NC}\\n"
+    exit 2
+fi
+
+# Any other state (CrashLoopBackOff, ErrImagePull, ImagePullBackOff, Failed, etc.)
+log_error "SkyOps Agent failed readiness: Phase=\${POD_PHASE}, Reason=\${WAITING_REASON:-\${TERMINATED_REASON:-Workload failed readiness checks}}"
+echo -e "\\n\${RED}======================================================================\${NC}"
+echo -e "\${RED}\${BOLD}   SkyOps Agent Installation Failed                                   \${NC}"
+echo -e "\${RED}======================================================================\${NC}"
+echo -e "Pod:             \${BOLD}\${POD_NAME}\${NC} (${namespace})"
+echo -e "Failure Reason:  \${RED}\${WAITING_REASON:-\${TERMINATED_REASON:-Workload failed readiness checks}}\${NC}"
+if [ -n "\$WAITING_MSG" ]; then
+    echo -e "Details:         \${WAITING_MSG}"
+fi
+echo -e "\${RED}----------------------------------------------------------------------\${NC}"
+echo -e "Recent Pod Events:"
+kubectl get events -n "${namespace}" --field-selector involvedObject.name="\${POD_NAME}" --sort-by='.metadata.creationTimestamp' 2>/dev/null | tail -n 5 || echo "  (no events available)"
+echo -e "\${RED}----------------------------------------------------------------------\${NC}"
+echo -e "Actionable Remediation:"
+echo -e "  • Pod description: \${BOLD}kubectl describe pod \${POD_NAME} -n ${namespace}\${NC}"
+echo -e "  • Pod logs:        \${BOLD}kubectl logs \${POD_NAME} -n ${namespace}\${NC}\\n"
+exit 1
 `;
 }
 
