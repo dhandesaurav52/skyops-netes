@@ -136,7 +136,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: skyops-agent
-          image: ghcr.io/dhandesaurav37/skyops-agent:v1.5.0
+          image: ghcr.io/skyops-software-solutions/skyops-agent:v1.5.0
           imagePullPolicy: IfNotPresent
           env:
             - name: SKYOPS_CLUSTER_ID

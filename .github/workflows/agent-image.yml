@@ -27,12 +27,13 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: dhandesaurav37/skyops-agent
 
 jobs:
   test:
     name: Run Go Unit Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: agent
@@ -59,6 +60,10 @@ jobs:
     name: Build & Publish Container Image
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -79,6 +84,16 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Building SkyOps Agent version: ${VERSION}"
 
+      - name: Resolve Image Name and Repository Owner
+        id: image_meta
+        run: |
+          # Lowercase the repository owner to guarantee compliance with OCI and GHCR specifications
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_REPO="${REGISTRY}/${OWNER}/skyops-agent"
+          echo "owner=${OWNER}" >> $GITHUB_OUTPUT
+          echo "image_repo=${IMAGE_REPO}" >> $GITHUB_OUTPUT
+          echo "Target image repository: ${IMAGE_REPO}"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -97,7 +112,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.image_meta.outputs.image_repo }}
           tags: |
             # Tag with Git Commit SHA
             type=sha,format=short,prefix=sha-
@@ -110,7 +125,8 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        id: build_push
+        uses: docker/build-push-action@v6
         with:
           context: ./agent
           file: ./agent/Dockerfile
@@ -121,4 +137,19 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
+
+      - name: Generate Job Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "### 🚀 SkyOps Agent Container Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Repository:** \`${{ steps.image_meta.outputs.image_repo }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** \`${{ steps.get_version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platforms:** \`linux/amd64\`, \`linux/arm64\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Manifest Digest:** \`${{ steps.build_push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Published Tags" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

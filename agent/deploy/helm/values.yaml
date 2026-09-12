@@ -2,7 +2,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/dhandesaurav37/skyops-agent
+  repository: ghcr.io/skyops-software-solutions/skyops-agent
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion (v1.5.0)
   tag: "v1.5.0"
