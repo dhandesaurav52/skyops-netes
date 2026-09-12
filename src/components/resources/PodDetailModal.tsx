@@ -17,7 +17,7 @@ import {
   Terminal,
   X
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Incident, KubernetesResource } from '../../types/index';
 import { PodPhaseBadge, ResourceHealthBadge, SeverityBadge, StatusBadge, WorkloadKindBadge } from '../common/Badges';
 import { Button } from '../common/UI';
@@ -42,17 +42,30 @@ export const PodDetailModal: React.FC<PodDetailModalProps> = ({
 }) => {
   const [activeSection, setActiveSection] = useState<'diagnostics' | 'resources' | 'containers' | 'hierarchy' | 'events' | 'yaml'>('diagnostics');
 
+  const safeClusterResources = useMemo(() => {
+    return Array.isArray(clusterResources)
+      ? clusterResources.filter((r): r is KubernetesResource => !!r)
+      : [];
+  }, [clusterResources]);
+
+  const safeIncidents = useMemo(() => {
+    return Array.isArray(incidents)
+      ? incidents.filter((i): i is Incident => !!i)
+      : [];
+  }, [incidents]);
+
   if (!pod) return null;
 
   // Observability flags
-  const containers = pod.containers || [];
+  const containers = Array.isArray(pod.containers) ? pod.containers.filter(Boolean) : [];
   const hasNoLimits = containers.length > 0 && containers.some((c) => !c.memoryLimit && !c.cpuLimit);
   const metricsAvailable = pod.statusSummary?.metricsAvailable === true;
   const metricsObservedAt = pod.statusSummary?.metricsObservedAt as string | undefined;
 
   // Find linked incident if any
-  const linkedIncident = incidents.find(
+  const linkedIncident = safeIncidents.find(
     (inc) =>
+      inc &&
       inc.clusterId === pod.clusterId &&
       inc.namespace === pod.namespace &&
       inc.resourceName === pod.name
@@ -489,7 +502,7 @@ export const PodDetailModal: React.FC<PodDetailModalProps> = ({
           {activeSection === 'hierarchy' && (
             <ResourceRelationshipTree
               primaryResource={pod}
-              allClusterResources={clusterResources}
+              allClusterResources={safeClusterResources}
               onSelectResource={onSelectResource}
             />
           )}

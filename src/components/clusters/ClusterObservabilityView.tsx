@@ -221,7 +221,8 @@ const ClusterObservabilityContent: React.FC<ClusterObservabilityViewProps> = ({
     );
   }
 
-  const filteredWorkloads = workloadSummaries.filter((w) => {
+  const safeWorkloadSummaries = Array.isArray(workloadSummaries) ? workloadSummaries : [];
+  const filteredWorkloads = safeWorkloadSummaries.filter((w) => {
     const wName = (w.name || w.resourceName || '').toLowerCase();
     const wNamespace = (w.namespace || '').toLowerCase();
     const wKind = (w.kind || w.workloadKind || '').toLowerCase();

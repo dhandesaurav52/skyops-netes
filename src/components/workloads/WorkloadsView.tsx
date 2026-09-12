@@ -18,88 +18,163 @@ import { Button, EmptyState } from '../common/UI';
 import { PodDetailModal } from '../resources/PodDetailModal';
 import { WorkloadDetailModal } from '../resources/WorkloadDetailModal';
 
-interface WorkloadsViewProps {
-  resources: KubernetesResource[];
-  clusters: Cluster[];
-  incidents: Incident[];
-  loading: boolean;
-  onRefresh: () => void;
-  onSelectCluster: (clusterId: string) => void;
-  onSelectIncident: (incidentId: string) => void;
+export interface WorkloadsViewProps {
+  // Supports both single-cluster (ClusterDetailView) and global invocations
+  workloads?: KubernetesResource[];
+  resources?: KubernetesResource[];
+  clusterResources?: KubernetesResource[];
+  cluster?: Cluster | null;
+  clusters?: Cluster[];
+  incidents?: Incident[];
+  loading?: boolean;
+  onRefresh?: () => void;
+  onSelectCluster?: (clusterId: string) => void;
+  onSelectIncident?: (incidentId: string) => void;
+  onSelectWorkload?: (workload: KubernetesResource) => void;
+  // Optional flag to adjust layout when embedded in tabs
+  isEmbedded?: boolean;
 }
 
 export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
+  workloads,
   resources,
+  clusterResources,
+  cluster,
   clusters,
   incidents,
-  loading,
+  loading = false,
   onRefresh,
   onSelectCluster,
-  onSelectIncident
+  onSelectIncident,
+  onSelectWorkload,
+  isEmbedded = false
 }) => {
   const [selectedClusterId, setSelectedClusterId] = useState<string>('all');
   const [selectedKind, setSelectedKind] = useState<string>('all');
   const [selectedHealth, setSelectedHealth] = useState<string>('all');
+  const [selectedNamespace, setSelectedNamespace] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const [selectedWorkload, setSelectedWorkload] = useState<KubernetesResource | null>(null);
-  const [selectedPod, setSelectedPod] = useState<KubernetesResource | null>(null);
+  const [localSelectedWorkload, setLocalSelectedWorkload] = useState<KubernetesResource | null>(null);
+  const [localSelectedPod, setLocalSelectedPod] = useState<KubernetesResource | null>(null);
 
   // Filter down to workload kinds
   const workloadKinds = ['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob'];
 
+  // Safe normalized collections
+  const safeClusterResources = useMemo(() => {
+    if (Array.isArray(clusterResources)) return clusterResources;
+    if (Array.isArray(resources)) return resources;
+    return [];
+  }, [clusterResources, resources]);
+
+  const safeClusters = useMemo(() => {
+    if (Array.isArray(clusters) && clusters.length > 0) return clusters;
+    if (cluster) return [cluster];
+    const clusterMap = new Map<string, { id: string; name: string }>();
+    for (const r of safeClusterResources) {
+      if (r && r.clusterId && !clusterMap.has(r.clusterId)) {
+        clusterMap.set(r.clusterId, {
+          id: r.clusterId,
+          name: r.clusterName || r.clusterId
+        });
+      }
+    }
+    return Array.from(clusterMap.values()) as unknown as Cluster[];
+  }, [clusters, cluster, safeClusterResources]);
+
+  const safeIncidents = useMemo(() => {
+    return Array.isArray(incidents) ? incidents : [];
+  }, [incidents]);
+
   const allWorkloads = useMemo(() => {
-    return resources.filter((r) => workloadKinds.includes(r.kind));
-  }, [resources]);
+    if (Array.isArray(workloads)) {
+      return workloads.filter((w): w is KubernetesResource => !!w);
+    }
+    return safeClusterResources.filter(
+      (r): r is KubernetesResource => !!r && workloadKinds.includes(r.kind)
+    );
+  }, [workloads, safeClusterResources]);
+
+  // Extract distinct namespaces for quick filtering
+  const distinctNamespaces = useMemo(() => {
+    const nsSet = new Set<string>();
+    for (const w of allWorkloads) {
+      if (w.namespace) nsSet.add(w.namespace);
+    }
+    return Array.from(nsSet).sort();
+  }, [allWorkloads]);
 
   const filteredWorkloads = useMemo(() => {
     return allWorkloads.filter((w) => {
-      if (selectedClusterId !== 'all' && w.clusterId !== selectedClusterId) return false;
-      if (selectedKind !== 'all' && w.kind.toLowerCase() !== selectedKind.toLowerCase()) return false;
-      if (selectedHealth !== 'all' && w.health.toLowerCase() !== selectedHealth.toLowerCase()) return false;
+      if (!w) return false;
+      if (selectedClusterId !== 'all' && w.clusterId && w.clusterId !== selectedClusterId) return false;
+      if (selectedKind !== 'all' && w.kind && w.kind.toLowerCase() !== selectedKind.toLowerCase()) return false;
+      if (selectedHealth !== 'all' && w.health && w.health.toLowerCase() !== selectedHealth.toLowerCase()) return false;
+      if (selectedNamespace !== 'all' && w.namespace !== selectedNamespace) return false;
+
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesName = w.name.toLowerCase().includes(q);
-        const matchesNs = w.namespace.toLowerCase().includes(q);
-        const matchesCluster = (w.clusterName || '').toLowerCase().includes(q);
+        const matchesName = (w.name || '').toLowerCase().includes(q);
+        const matchesNs = (w.namespace || '').toLowerCase().includes(q);
+        const matchesCluster = (w.clusterName || w.clusterId || '').toLowerCase().includes(q);
         if (!matchesName && !matchesNs && !matchesCluster) return false;
       }
       return true;
     });
-  }, [allWorkloads, selectedClusterId, selectedKind, selectedHealth, searchQuery]);
+  }, [allWorkloads, selectedClusterId, selectedKind, selectedHealth, selectedNamespace, searchQuery]);
 
   // Metric stats
   const totalCount = allWorkloads.length;
   const degradedCount = allWorkloads.filter(
-    (w) => w.health === 'CRITICAL' || w.health === 'WARNING'
+    (w) => w && (w.health === 'CRITICAL' || w.health === 'WARNING')
   ).length;
-  const healthyCount = allWorkloads.filter((w) => w.health === 'HEALTHY').length;
+  const healthyCount = allWorkloads.filter((w) => w && w.health === 'HEALTHY').length;
+
+  const handleInspect = (workload: KubernetesResource) => {
+    if (onSelectWorkload) {
+      onSelectWorkload(workload);
+    } else {
+      setLocalSelectedWorkload(workload);
+    }
+  };
+
+  const handleInspectPod = (pod: KubernetesResource) => {
+    setLocalSelectedWorkload(null);
+    setLocalSelectedPod(pod);
+  };
+
+  const isMultiCluster = safeClusters.length > 1;
 
   return (
-    <div className="p-8 space-y-6 max-w-7xl mx-auto font-sans">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-5">
-        <div>
-          <h1 className="text-xl font-bold text-zinc-100 tracking-tight flex items-center gap-2.5 font-mono">
-            <Boxes className="w-5 h-5 text-sky-400" />
-            Workload Operations Console
-          </h1>
-          <p className="text-xs font-mono text-zinc-400 mt-1">
-            Real-time status of Deployments, StatefulSets, DaemonSets, and Jobs across all connected Kubernetes clusters
-          </p>
+    <div className={`space-y-6 ${isEmbedded ? '' : 'p-8 max-w-7xl mx-auto'} font-sans`}>
+      {/* Top Header if not embedded */}
+      {!isEmbedded && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-5">
+          <div>
+            <h1 className="text-xl font-bold text-zinc-100 tracking-tight flex items-center gap-2.5 font-mono">
+              <Boxes className="w-5 h-5 text-sky-400" />
+              Workload Operations Console
+            </h1>
+            <p className="text-xs font-mono text-zinc-400 mt-1">
+              Real-time status of Deployments, StatefulSets, DaemonSets, and Jobs across monitored Kubernetes clusters
+            </p>
+          </div>
+          {onRefresh && (
+            <div className="flex items-center gap-2.5">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onRefresh}
+                disabled={loading}
+                icon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />}
+              >
+                Refresh Telemetry
+              </Button>
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-2.5">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onRefresh}
-            disabled={loading}
-            icon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />}
-          >
-            Refresh Telemetry
-          </Button>
-        </div>
-      </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -120,17 +195,25 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
 
         <div className="p-4 rounded-xl bg-rose-950/20 border border-rose-900/40">
           <div className="text-[11px] font-mono text-rose-400 uppercase tracking-wider flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+            <span className={`w-1.5 h-1.5 rounded-full ${degradedCount > 0 ? 'bg-rose-500 animate-pulse' : 'bg-zinc-600'}`} />
             Degraded / Attention
           </div>
-          <div className="text-2xl font-bold text-rose-300 font-mono mt-1">{degradedCount}</div>
-          <div className="text-[10px] font-mono text-rose-500 mt-1">Unavailable pods or crashes</div>
+          <div className={`text-2xl font-bold font-mono mt-1 ${degradedCount > 0 ? 'text-rose-300' : 'text-zinc-400'}`}>
+            {degradedCount}
+          </div>
+          <div className="text-[10px] font-mono text-zinc-500 mt-1">Unavailable pods or crashes</div>
         </div>
 
         <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800/80">
-          <div className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">Connected Clusters</div>
-          <div className="text-2xl font-bold text-zinc-200 font-mono mt-1">{clusters.length}</div>
-          <div className="text-[10px] font-mono text-zinc-500 mt-1">Registered infrastructure</div>
+          <div className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider">
+            {isMultiCluster ? 'Connected Clusters' : 'Namespaces'}
+          </div>
+          <div className="text-2xl font-bold text-zinc-200 font-mono mt-1">
+            {isMultiCluster ? safeClusters.length : distinctNamespaces.length}
+          </div>
+          <div className="text-[10px] font-mono text-zinc-500 mt-1">
+            {isMultiCluster ? 'Registered infrastructure' : 'Active scopes'}
+          </div>
         </div>
       </div>
 
@@ -149,19 +232,37 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
             />
           </div>
 
-          {/* Cluster filter */}
-          <select
-            value={selectedClusterId}
-            onChange={(e) => setSelectedClusterId(e.target.value)}
-            className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-zinc-300 focus:outline-none focus:border-sky-500"
-          >
-            <option value="all">All Clusters ({clusters.length})</option>
-            {clusters.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          {/* Cluster filter (only if multiple clusters) */}
+          {isMultiCluster && (
+            <select
+              value={selectedClusterId}
+              onChange={(e) => setSelectedClusterId(e.target.value)}
+              className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-zinc-300 focus:outline-none focus:border-sky-500"
+            >
+              <option value="all">All Clusters ({safeClusters.length})</option>
+              {safeClusters.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Namespace filter */}
+          {distinctNamespaces.length > 1 && (
+            <select
+              value={selectedNamespace}
+              onChange={(e) => setSelectedNamespace(e.target.value)}
+              className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-zinc-300 focus:outline-none focus:border-sky-500"
+            >
+              <option value="all">All Namespaces ({distinctNamespaces.length})</option>
+              {distinctNamespaces.map((ns) => (
+                <option key={ns} value={ns}>
+                  {ns}
+                </option>
+              ))}
+            </select>
+          )}
 
           {/* Workload Kind filter */}
           <select
@@ -201,8 +302,8 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
           title="No workloads found"
           description={
             allWorkloads.length === 0
-              ? 'No Kubernetes workloads are currently reporting telemetry. Connect an agent or deploy a sample workload.'
-              : 'No workloads matched the selected filters.'
+              ? 'No Kubernetes workloads are currently reporting telemetry for this cluster. Check agent status or deploy workloads.'
+              : 'No workloads matched the selected filters. Try broadening your search or health filters.'
           }
         />
       ) : (
@@ -212,7 +313,7 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
               <tr>
                 <th className="p-3.5">Workload Name</th>
                 <th className="p-3.5">Kind</th>
-                <th className="p-3.5">Cluster</th>
+                {isMultiCluster && <th className="p-3.5">Cluster</th>}
                 <th className="p-3.5">Namespace</th>
                 <th className="p-3.5">Health</th>
                 <th className="p-3.5">Replicas</th>
@@ -229,8 +330,9 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
                   0
                 );
 
-                const linkedIncidents = incidents.filter(
+                const linkedIncidents = safeIncidents.filter(
                   (inc) =>
+                    inc &&
                     inc.clusterId === workload.clusterId &&
                     inc.namespace === workload.namespace &&
                     inc.resourceName === workload.name
@@ -239,7 +341,7 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
                 return (
                   <tr
                     key={workload.id}
-                    onClick={() => setSelectedWorkload(workload)}
+                    onClick={() => handleInspect(workload)}
                     className="hover:bg-zinc-800/40 transition-colors cursor-pointer group"
                   >
                     <td className="p-3.5 font-bold text-zinc-100 group-hover:text-sky-300">
@@ -248,17 +350,19 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
                     <td className="p-3.5">
                       <WorkloadKindBadge kind={workload.kind} />
                     </td>
-                    <td className="p-3.5 text-zinc-300">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectCluster(workload.clusterId);
-                        }}
-                        className="hover:text-sky-400 underline decoration-zinc-700 underline-offset-2 truncate max-w-[140px]"
-                      >
-                        {workload.clusterName || workload.clusterId}
-                      </button>
-                    </td>
+                    {isMultiCluster && (
+                      <td className="p-3.5 text-zinc-300">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onSelectCluster) onSelectCluster(workload.clusterId);
+                          }}
+                          className="hover:text-sky-400 underline decoration-zinc-700 underline-offset-2 truncate max-w-[140px]"
+                        >
+                          {workload.clusterName || workload.clusterId}
+                        </button>
+                      </td>
+                    )}
                     <td className="p-3.5 text-zinc-400 truncate max-w-[120px]">{workload.namespace}</td>
                     <td className="p-3.5">
                       <ResourceHealthBadge health={workload.health} />
@@ -291,7 +395,7 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onSelectIncident(linkedIncidents[0].id);
+                            if (onSelectIncident) onSelectIncident(linkedIncidents[0].id);
                           }}
                           className="px-2 py-0.5 rounded bg-rose-950/60 text-rose-300 border border-rose-800/60 font-bold hover:bg-rose-900"
                         >
@@ -305,7 +409,7 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSelectedWorkload(workload);
+                          handleInspect(workload);
                         }}
                         className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-sky-900/60 hover:text-sky-200 text-zinc-300 text-xs font-mono transition-colors"
                       >
@@ -320,33 +424,30 @@ export const WorkloadsView: React.FC<WorkloadsViewProps> = ({
         </div>
       )}
 
-      {/* Workload Detail Modal */}
-      {selectedWorkload && (
+      {/* Workload Detail Modal fallback when not controlled by parent */}
+      {!onSelectWorkload && localSelectedWorkload && (
         <WorkloadDetailModal
-          workload={selectedWorkload}
-          clusterResources={resources.filter((r) => r.clusterId === selectedWorkload.clusterId)}
-          incidents={incidents}
-          onClose={() => setSelectedWorkload(null)}
-          onSelectPod={(pod) => {
-            setSelectedWorkload(null);
-            setSelectedPod(pod);
-          }}
+          workload={localSelectedWorkload}
+          clusterResources={safeClusterResources.filter((r) => r && r.clusterId === localSelectedWorkload.clusterId)}
+          incidents={safeIncidents}
+          onClose={() => setLocalSelectedWorkload(null)}
+          onSelectPod={handleInspectPod}
           onSelectIncident={onSelectIncident}
         />
       )}
 
-      {/* Pod Detail Modal */}
-      {selectedPod && (
+      {/* Pod Detail Modal fallback */}
+      {!onSelectWorkload && localSelectedPod && (
         <PodDetailModal
-          pod={selectedPod}
-          clusterResources={resources.filter((r) => r.clusterId === selectedPod.clusterId)}
-          incidents={incidents}
-          onClose={() => setSelectedPod(null)}
+          pod={localSelectedPod}
+          clusterResources={safeClusterResources.filter((r) => r && r.clusterId === localSelectedPod.clusterId)}
+          incidents={safeIncidents}
+          onClose={() => setLocalSelectedPod(null)}
           onSelectIncident={onSelectIncident}
           onSelectResource={(res) => {
             if (workloadKinds.includes(res.kind)) {
-              setSelectedPod(null);
-              setSelectedWorkload(res);
+              setLocalSelectedPod(null);
+              setLocalSelectedWorkload(res);
             }
           }}
         />

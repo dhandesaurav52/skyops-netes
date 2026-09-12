@@ -12,7 +12,7 @@ import {
   Terminal,
   X
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Incident, KubernetesResource } from '../../types/index';
 import { PodPhaseBadge, ResourceHealthBadge, SeverityBadge, WorkloadKindBadge } from '../common/Badges';
 import { Button } from '../common/UI';
@@ -37,28 +37,42 @@ export const WorkloadDetailModal: React.FC<WorkloadDetailModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'pods' | 'hierarchy' | 'conditions' | 'yaml'>('overview');
 
+  const safeClusterResources = useMemo(() => {
+    return Array.isArray(clusterResources)
+      ? clusterResources.filter((r): r is KubernetesResource => !!r)
+      : [];
+  }, [clusterResources]);
+
+  const safeIncidents = useMemo(() => {
+    return Array.isArray(incidents)
+      ? incidents.filter((i): i is Incident => !!i)
+      : [];
+  }, [incidents]);
+
   if (!workload) return null;
 
   // Find child pods
-  const childPods = clusterResources.filter((r) => {
+  const childPods = safeClusterResources.filter((r) => {
     if (r.kind !== 'Pod' || r.namespace !== workload.namespace) return false;
     if (r.ownerReferences && r.ownerReferences.length > 0) {
       return r.ownerReferences.some(
         (o) =>
-          (o.kind === workload.kind && o.name === workload.name) ||
-          (workload.kind === 'Deployment' && o.kind === 'ReplicaSet' && o.name?.startsWith(workload.name)) ||
-          (workload.kind === 'CronJob' && o.kind === 'Job' && o.name?.startsWith(workload.name))
+          o &&
+          ((o.kind === workload.kind && o.name === workload.name) ||
+            (workload.kind === 'Deployment' && o.kind === 'ReplicaSet' && o.name?.startsWith(workload.name)) ||
+            (workload.kind === 'CronJob' && o.kind === 'Job' && o.name?.startsWith(workload.name)))
       );
     }
-    return r.name.startsWith(`${workload.name}-`);
+    return typeof r.name === 'string' && r.name.startsWith(`${workload.name}-`);
   });
 
   const crashingPods = childPods.filter(
     (p) =>
-      p.health === 'CRITICAL' ||
-      p.status === 'CrashLoopBackOff' ||
-      p.status === 'ImagePullBackOff' ||
-      p.status === 'Failed'
+      p &&
+      (p.health === 'CRITICAL' ||
+        p.status === 'CrashLoopBackOff' ||
+        p.status === 'ImagePullBackOff' ||
+        p.status === 'Failed')
   );
 
   const desiredReplicas = Number(workload.specSummary?.replicas ?? 1);
@@ -71,7 +85,7 @@ export const WorkloadDetailModal: React.FC<WorkloadDetailModalProps> = ({
   const updatedReplicas = Number(workload.statusSummary?.updatedReplicas ?? readyReplicas);
 
   // Find linked incident if any
-  const linkedIncident = incidents.find(
+  const linkedIncident = safeIncidents.find(
     (inc) =>
       inc.clusterId === workload.clusterId &&
       inc.namespace === workload.namespace &&

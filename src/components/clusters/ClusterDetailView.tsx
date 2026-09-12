@@ -4,7 +4,10 @@ import {
   ArrowLeft,
   Boxes,
   CheckCircle2,
+  ChevronRight,
   Clock,
+  Cpu,
+  Database,
   KeyRound,
   Layers,
   ListTree,
@@ -17,7 +20,9 @@ import {
   ShieldCheck,
   Terminal,
   Trash2,
-  Unplug
+  TrendingUp,
+  Unplug,
+  Zap
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api/client';
@@ -648,7 +653,7 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
         </div>
       ) : activeTab === 'overview' ? (
         <div className="space-y-6 font-mono text-xs">
-          {/* Health & Attention Banner if anything degraded */}
+          {/* 1. Health Status Banner (Actionable Alert or Nominal) */}
           {(crashingPods.length > 0 || degradedWorkloads.length > 0) ? (
             <div className="p-5 rounded-xl bg-rose-950/20 border border-rose-900/40 space-y-4">
               <div className="flex items-center justify-between border-b border-rose-900/40 pb-3">
@@ -763,16 +768,177 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
               </div>
             </div>
           ) : (
-            <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-900/40 flex items-center gap-3 text-emerald-300">
-              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-              <div>
-                <span className="font-bold block">Nominal Cluster State</span>
-                <span className="text-[11px] text-emerald-400/80">
-                  All {workloads.length} workloads and {pods.length} pods are healthy with 0 active incidents.
-                </span>
+            <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-900/40 flex items-center justify-between gap-3 text-emerald-300">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                <div>
+                  <span className="font-bold block">Nominal Cluster State</span>
+                  <span className="text-[11px] text-emerald-400/80">
+                    All {workloads.length} workloads and {pods.length} pods are healthy with 0 active incidents.
+                  </span>
+                </div>
+              </div>
+              <div className="text-[10px] font-mono px-2 py-1 rounded bg-emerald-950 border border-emerald-800 text-emerald-300">
+                100% OPERATIONAL
               </div>
             </div>
           )}
+
+          {/* 2. Cluster Health Experience: Nodes Grid & Pod/Workload Density Matrix */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Node Infrastructure Visualization */}
+            <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+              <div className="flex items-center justify-between text-zinc-300">
+                <span className="font-bold text-sm flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-sky-400" />
+                  Node Topology
+                </span>
+                <button
+                  onClick={() => setActiveTab('nodes')}
+                  className="text-[11px] text-sky-400 hover:underline"
+                >
+                  Inspect All ({nodes.length}) →
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {nodes.length === 0 ? (
+                  <div className="text-zinc-500 text-xs py-2">No nodes discovered yet.</div>
+                ) : (
+                  nodes.map((node) => {
+                    const isReady = node.status === 'Ready';
+                    const conds = Array.isArray(node.conditions) ? node.conditions : [];
+                    const hasMemoryPressure = conds.some(
+                      (c) => c.type === 'MemoryPressure' && (c.status === 'True' || c.status === true)
+                    );
+                    const hasDiskPressure = conds.some(
+                      (c) => c.type === 'DiskPressure' && (c.status === 'True' || c.status === true)
+                    );
+                    const nodePods = pods.filter((p) => p.nodeName === node.name);
+
+                    return (
+                      <div
+                        key={node.id}
+                        onClick={() => setSelectedResource(node)}
+                        className="p-2.5 rounded-lg bg-zinc-950/80 border border-zinc-800/80 hover:border-zinc-700 cursor-pointer transition-colors space-y-1"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-zinc-200 truncate">{node.name}</span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              isReady && !hasMemoryPressure && !hasDiskPressure
+                                ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                : 'bg-amber-950 text-amber-300 border border-amber-800'
+                            }`}
+                          >
+                            {isReady ? 'Ready' : node.status}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                          <span>{nodePods.length} Scheduled Pods</span>
+                          <span>
+                            {hasMemoryPressure ? 'Mem Pressure' : hasDiskPressure ? 'Disk Pressure' : 'Healthy Spec'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Pod Experience & Health Breakdown */}
+            <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+              <div className="flex items-center justify-between text-zinc-300">
+                <span className="font-bold text-sm flex items-center gap-2">
+                  <Boxes className="w-4 h-4 text-violet-400" />
+                  Pod Health Experience
+                </span>
+                <button
+                  onClick={() => setActiveTab('pods')}
+                  className="text-[11px] text-sky-400 hover:underline"
+                >
+                  Inspect All ({pods.length}) →
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">Running / Healthy:</span>
+                  <strong className="text-emerald-400">
+                    {pods.filter((p) => p.status === 'Running' && p.health === 'HEALTHY').length}
+                  </strong>
+                </div>
+
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">CrashLoopBackOff:</span>
+                  <strong className={pods.filter((p) => p.status === 'CrashLoopBackOff').length > 0 ? 'text-rose-400' : 'text-zinc-400'}>
+                    {pods.filter((p) => p.status === 'CrashLoopBackOff').length}
+                  </strong>
+                </div>
+
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">ImagePullBackOff / OOM:</span>
+                  <strong className={pods.filter((p) => p.status === 'ImagePullBackOff' || p.status === 'OOMKilled').length > 0 ? 'text-amber-400' : 'text-zinc-400'}>
+                    {pods.filter((p) => p.status === 'ImagePullBackOff' || p.status === 'OOMKilled').length}
+                  </strong>
+                </div>
+
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">Pending / Scheduling:</span>
+                  <strong className="text-zinc-300">
+                    {pods.filter((p) => p.status === 'Pending' || p.status === 'ContainerCreating').length}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Workload Health & Controller Specs */}
+            <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+              <div className="flex items-center justify-between text-zinc-300">
+                <span className="font-bold text-sm flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-emerald-400" />
+                  Workload Experience
+                </span>
+                <button
+                  onClick={() => setActiveTab('workloads')}
+                  className="text-[11px] text-sky-400 hover:underline"
+                >
+                  Inspect All ({workloads.length}) →
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">Deployments:</span>
+                  <strong className="text-zinc-200">
+                    {workloads.filter((w) => w.kind === 'Deployment').length}
+                  </strong>
+                </div>
+
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">StatefulSets:</span>
+                  <strong className="text-zinc-200">
+                    {workloads.filter((w) => w.kind === 'StatefulSet').length}
+                  </strong>
+                </div>
+
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">DaemonSets:</span>
+                  <strong className="text-zinc-200">
+                    {workloads.filter((w) => w.kind === 'DaemonSet').length}
+                  </strong>
+                </div>
+
+                <div className="flex justify-between p-2 rounded bg-zinc-950/60 border border-zinc-800/60">
+                  <span className="text-zinc-400">Degraded Controllers:</span>
+                  <strong className={degradedWorkloads.length > 0 ? 'text-rose-400' : 'text-emerald-400'}>
+                    {degradedWorkloads.length} degraded
+                  </strong>
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Incidents on this Cluster */}
           <div className="space-y-3">
@@ -882,14 +1048,26 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
           workloads={workloads}
           clusterResources={safeResources}
           incidents={safeIncidents}
+          cluster={cluster}
+          clusters={cluster ? [cluster] : []}
           onSelectWorkload={(w) => setSelectedResource(w)}
+          onSelectIncident={onSelectIncident}
+          onRefresh={handleManualRefresh}
+          loading={manualRefreshing || loading}
+          isEmbedded={true}
         />
       ) : activeTab === 'pods' ? (
         <PodsView
           pods={pods}
           clusterResources={safeResources}
           incidents={safeIncidents}
+          cluster={cluster}
+          clusters={cluster ? [cluster] : []}
           onSelectPod={(p) => setSelectedResource(p)}
+          onSelectIncident={onSelectIncident}
+          onRefresh={handleManualRefresh}
+          loading={manualRefreshing || loading}
+          isEmbedded={true}
         />
       ) : activeTab === 'nodes' ? (
         <div className="space-y-4">

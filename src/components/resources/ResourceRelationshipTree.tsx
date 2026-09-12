@@ -20,9 +20,13 @@ interface ResourceRelationshipTreeProps {
 
 export const ResourceRelationshipTree: React.FC<ResourceRelationshipTreeProps> = ({
   primaryResource,
-  allClusterResources,
+  allClusterResources = [],
   onSelectResource
 }) => {
+  const safeClusterResources = Array.isArray(allClusterResources)
+    ? allClusterResources.filter((r): r is KubernetesResource => !!r)
+    : [];
+
   const isPod = primaryResource.kind === 'Pod';
   const isWorkload = ['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob'].includes(
     primaryResource.kind
@@ -30,27 +34,28 @@ export const ResourceRelationshipTree: React.FC<ResourceRelationshipTreeProps> =
 
   // Helper to find child pods for a workload
   const findChildPods = (workload: KubernetesResource): KubernetesResource[] => {
-    return allClusterResources.filter((r) => {
+    return safeClusterResources.filter((r) => {
       if (r.kind !== 'Pod' || r.namespace !== workload.namespace) return false;
 
       // Check direct ownerReference
       if (r.ownerReferences && r.ownerReferences.length > 0) {
         const matchesOwner = r.ownerReferences.some(
           (o) =>
-            (o.kind === workload.kind && o.name === workload.name) ||
-            (workload.kind === 'Deployment' &&
-              o.kind === 'ReplicaSet' &&
-              o.name?.startsWith(workload.name)) ||
-            (workload.kind === 'CronJob' &&
-              o.kind === 'Job' &&
-              o.name?.startsWith(workload.name))
+            o &&
+            ((o.kind === workload.kind && o.name === workload.name) ||
+              (workload.kind === 'Deployment' &&
+                o.kind === 'ReplicaSet' &&
+                o.name?.startsWith(workload.name)) ||
+              (workload.kind === 'CronJob' &&
+                o.kind === 'Job' &&
+                o.name?.startsWith(workload.name)))
         );
         if (matchesOwner) return true;
       }
 
       // Fallback to Kubernetes standard naming convention
       const prefix = `${workload.name}-`;
-      return r.name.startsWith(prefix);
+      return typeof r.name === 'string' && r.name.startsWith(prefix);
     });
   };
 
@@ -59,10 +64,10 @@ export const ResourceRelationshipTree: React.FC<ResourceRelationshipTreeProps> =
     // Check owner references
     if (pod.ownerReferences && pod.ownerReferences.length > 0) {
       const topOwner = pod.ownerReferences[0];
-      if (topOwner.kind === 'ReplicaSet') {
+      if (topOwner && topOwner.kind === 'ReplicaSet') {
         // Find deployment that owns this replica set
         const rsName = topOwner.name || '';
-        const dep = allClusterResources.find(
+        const dep = safeClusterResources.find(
           (r) =>
             r.kind === 'Deployment' &&
             r.namespace === pod.namespace &&
@@ -71,18 +76,20 @@ export const ResourceRelationshipTree: React.FC<ResourceRelationshipTreeProps> =
         if (dep) return { parent: dep, controller: rsName };
         return { controller: rsName };
       }
-      const directParent = allClusterResources.find(
-        (r) =>
-          r.kind === topOwner.kind &&
-          r.name === topOwner.name &&
-          r.namespace === pod.namespace
-      );
-      if (directParent) return { parent: directParent, controller: topOwner.name };
-      return { controller: topOwner.name };
+      if (topOwner) {
+        const directParent = safeClusterResources.find(
+          (r) =>
+            r.kind === topOwner.kind &&
+            r.name === topOwner.name &&
+            r.namespace === pod.namespace
+        );
+        if (directParent) return { parent: directParent, controller: topOwner.name };
+        return { controller: topOwner.name };
+      }
     }
 
     // Name matching fallback
-    for (const r of allClusterResources) {
+    for (const r of safeClusterResources) {
       if (['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob'].includes(r.kind)) {
         if (r.namespace === pod.namespace && pod.name.startsWith(`${r.name}-`)) {
           return { parent: r, controller: pod.name.slice(0, pod.name.lastIndexOf('-')) };
