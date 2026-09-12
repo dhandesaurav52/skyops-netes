@@ -139,7 +139,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ clusters, onSelectIn
         </p>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-2 mt-5 border-b border-zinc-800 -mb-5 pb-px overflow-x-auto">
+        <div className="flex items-center gap-2 mt-5 border-b border-zinc-800 -mb-5 pb-px overflow-x-auto no-scrollbar">
           {[
             { id: 'org', label: 'Organization & Team', icon: <Building2 className="w-3.5 h-3.5" /> },
             { id: 'notifications', label: 'Notifications', icon: <Bell className="w-3.5 h-3.5" /> },
@@ -151,7 +151,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ clusters, onSelectIn
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id as SettingsTab)}
-              className={`px-3.5 py-2 font-mono text-xs flex items-center gap-2 border-b-2 transition-colors cursor-pointer ${
+              className={`px-3.5 py-2 font-mono text-xs flex items-center gap-2 border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
                 activeTab === t.id
                   ? 'border-sky-500 text-sky-400 font-semibold bg-sky-950/20 rounded-t'
                   : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'

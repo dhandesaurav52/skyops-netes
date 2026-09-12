@@ -390,7 +390,7 @@ export const WebhooksManager: React.FC = () => {
               No recorded delivery attempts for this endpoint yet.
             </div>
           ) : (
-            <div className="space-y-2 max-h-80 overflow-y-auto">
+            <div className="space-y-2 max-h-80 overflow-y-auto scrollbar-subtle">
               {deliveries.map((del) => (
                 <div
                   key={del.id}

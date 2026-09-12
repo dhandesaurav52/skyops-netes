@@ -444,7 +444,7 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
             </div>
 
             {/* Tabs Bar */}
-            <div className="flex items-center gap-2 overflow-x-auto border-b border-zinc-800/70 pb-2">
+            <div className="flex items-center gap-2 overflow-x-auto border-b border-zinc-800/70 pb-2 no-scrollbar">
               <button
                 type="button"
                 onClick={() => setActiveTab('events')}
@@ -516,7 +516,7 @@ export const IncidentEvidenceSection: React.FC<IncidentEvidenceSectionProps> = (
             {activeTab === 'events' && (
               <div className="space-y-2">
                 {tech.events && tech.events.length > 0 ? (
-                  <div className="divide-y divide-zinc-800/60 max-h-80 overflow-y-auto rounded-lg border border-zinc-800/80 bg-zinc-950/60">
+                  <div className="divide-y divide-zinc-800/60 max-h-80 overflow-y-auto scrollbar-subtle rounded-lg border border-zinc-800/80 bg-zinc-950/60">
                     {tech.events.map((ev, idx) => (
                       <div key={idx} className="p-3.5 hover:bg-zinc-900/40 text-xs font-mono space-y-1.5">
                         <div className="flex items-center justify-between gap-2">

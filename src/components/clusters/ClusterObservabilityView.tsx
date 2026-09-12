@@ -313,10 +313,10 @@ const ClusterObservabilityContent: React.FC<ClusterObservabilityViewProps> = ({
       </div>
 
       {/* Sub-tabs */}
-      <div className="flex items-center gap-1 border-b border-zinc-800">
+      <div className="flex items-center gap-1 border-b border-zinc-800 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveSubTab('cluster')}
-          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors ${
+          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors whitespace-nowrap ${
             activeSubTab === 'cluster'
               ? 'border-sky-500 text-sky-400 font-semibold'
               : 'border-transparent text-zinc-400 hover:text-zinc-200'
@@ -326,7 +326,7 @@ const ClusterObservabilityContent: React.FC<ClusterObservabilityViewProps> = ({
         </button>
         <button
           onClick={() => setActiveSubTab('nodes')}
-          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
             activeSubTab === 'nodes'
               ? 'border-sky-500 text-sky-400 font-semibold'
               : 'border-transparent text-zinc-400 hover:text-zinc-200'
@@ -337,7 +337,7 @@ const ClusterObservabilityContent: React.FC<ClusterObservabilityViewProps> = ({
         </button>
         <button
           onClick={() => setActiveSubTab('workloads')}
-          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
             activeSubTab === 'workloads'
               ? 'border-sky-500 text-sky-400 font-semibold'
               : 'border-transparent text-zinc-400 hover:text-zinc-200'
@@ -348,7 +348,7 @@ const ClusterObservabilityContent: React.FC<ClusterObservabilityViewProps> = ({
         </button>
         <button
           onClick={() => setActiveSubTab('history')}
-          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+          className={`px-4 py-2 text-xs font-mono font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
             activeSubTab === 'history'
               ? 'border-sky-500 text-sky-400 font-semibold'
               : 'border-transparent text-zinc-400 hover:text-zinc-200'
@@ -739,7 +739,7 @@ const ClusterObservabilityContent: React.FC<ClusterObservabilityViewProps> = ({
         <div className="space-y-4">
           {/* Controls & Badges Filter */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-900 border border-zinc-800 p-3 rounded-xl">
-            <div className="flex items-center gap-2 overflow-x-auto">
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
               <button
                 onClick={() => setWorkloadFilter('all')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-colors ${

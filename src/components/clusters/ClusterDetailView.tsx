@@ -475,7 +475,7 @@ const ClusterDetailViewInner: React.FC<ClusterDetailViewProps> = ({ clusterId, o
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 border-b border-zinc-800 overflow-x-auto">
+      <div className="flex items-center gap-1 border-b border-zinc-800 overflow-x-auto no-scrollbar">
         {tabs.map((tab) => (
           <button
             key={tab.id}

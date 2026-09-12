@@ -234,7 +234,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       {/* Main Navigation */}
-      <div className={`py-4 flex-1 space-y-1 overflow-y-auto ${isCollapsed ? 'px-2' : 'px-3'}`}>
+      <div className={`py-4 flex-1 space-y-1 overflow-y-auto no-scrollbar ${isCollapsed ? 'px-2' : 'px-3'}`}>
         {!isCollapsed && (
           <div className="px-3 py-1 text-[10px] font-mono text-zinc-500 uppercase tracking-wider">Navigation</div>
         )}

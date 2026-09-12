@@ -247,7 +247,7 @@ export const SkyOpsIntelligenceCard: React.FC<SkyOpsIntelligenceCardProps> = ({
       </div>
 
       {/* Tabs Navigation */}
-      <div className="flex items-center gap-2 border-b border-zinc-800/70 pb-2 overflow-x-auto">
+      <div className="flex items-center gap-2 border-b border-zinc-800/70 pb-2 overflow-x-auto no-scrollbar">
         <button
           type="button"
           onClick={() => setActiveTab('hypotheses')}
@@ -418,7 +418,7 @@ export const SkyOpsIntelligenceCard: React.FC<SkyOpsIntelligenceCardProps> = ({
       {activeTab === 'signals' && (
         <div className="space-y-3">
           {/* Filter Pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
             {signalCategories.map((cat) => (
               <button
                 key={cat.id}

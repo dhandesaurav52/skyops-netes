@@ -163,7 +163,7 @@ export const WorkloadDetailModal: React.FC<WorkloadDetailModalProps> = ({
         )}
 
         {/* Tab Navigation */}
-        <div className="flex items-center border-b border-zinc-800 px-5 gap-1 bg-zinc-950/30 overflow-x-auto">
+        <div className="flex items-center border-b border-zinc-800 px-5 gap-1 bg-zinc-950/30 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab('overview')}
             className={`px-3.5 py-2.5 text-xs font-mono font-medium border-b-2 transition-colors whitespace-nowrap ${
@@ -220,7 +220,7 @@ export const WorkloadDetailModal: React.FC<WorkloadDetailModalProps> = ({
         </div>
 
         {/* Modal Content */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 text-sm font-mono">
+        <div className="p-6 overflow-y-auto space-y-6 flex-1 text-sm font-mono scrollbar-subtle">
           {activeTab === 'overview' && (
             <div className="space-y-6">
               {/* Replica KPI Cards */}
@@ -400,7 +400,7 @@ export const WorkloadDetailModal: React.FC<WorkloadDetailModalProps> = ({
           {activeTab === 'yaml' && (
             <div className="space-y-2">
               <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Raw Workload Definition</div>
-              <pre className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-300 overflow-x-auto font-mono max-h-96">
+              <pre className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-300 overflow-x-auto font-mono max-h-96 scrollbar-subtle">
                 {JSON.stringify(workload, null, 2)}
               </pre>
             </div>

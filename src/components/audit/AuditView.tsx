@@ -355,7 +355,7 @@ export const AuditView: React.FC = () => {
                                   </div>
                                   <CopyButton text={JSON.stringify(log.details || {}, null, 2)} />
                                 </div>
-                                <pre className="p-3 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-300 overflow-x-auto max-h-60 leading-relaxed">
+                                <pre className="p-3 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-300 overflow-x-auto max-h-60 leading-relaxed scrollbar-subtle">
                                   {JSON.stringify(log.details || {}, null, 2)}
                                 </pre>
                               </div>

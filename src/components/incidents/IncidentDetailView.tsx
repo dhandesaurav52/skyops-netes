@@ -389,7 +389,7 @@ export const IncidentDetailView: React.FC<IncidentDetailViewProps> = ({
 
         {/* Compact Incident Lifecycle Bar */}
         <div className="pt-3 border-t border-zinc-800/80">
-          <div className="flex items-center justify-between text-[11px] font-mono overflow-x-auto pb-1 gap-2">
+          <div className="flex items-center justify-between text-[11px] font-mono overflow-x-auto pb-1 gap-2 no-scrollbar">
             {/* Stage 1: Detected */}
             <div className="flex items-center gap-2 shrink-0">
               <span className="w-5 h-5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-700 flex items-center justify-center font-bold text-[10px]">

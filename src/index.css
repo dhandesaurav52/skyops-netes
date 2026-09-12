@@ -1,1 +1,88 @@
 @import "tailwindcss";
+
+/* 
+ * =========================================================
+ * GLOBAL SLEEK & NON-INTRUSIVE SCROLLBAR ARCHITECTURE
+ * Eliminates thick, high-contrast native OS scrollbar tracks
+ * across all browsers, operating systems, and dark theme UI.
+ * =========================================================
+ */
+
+/* Standard CSS scrollbar properties (Firefox, Chrome 121+) */
+html,
+body,
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(161, 161, 170, 0.22) transparent;
+}
+
+*:hover {
+  scrollbar-color: rgba(161, 161, 170, 0.4) transparent;
+}
+
+/* WebKit, Blink, and Chromium scrollbar styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.22);
+  border-radius: 9999px;
+  transition: background-color 0.2s ease-in-out;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.45);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 
+ * Utility to completely hide scrollbars while maintaining native
+ * touch, trackpad, and mousewheel scrollability (e.g. navigation tabs, filter bars)
+ */
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.no-scrollbar,
+.scrollbar-none {
+  -ms-overflow-style: none !important; /* IE and Edge */
+  scrollbar-width: none !important; /* Firefox */
+}
+
+/* 
+ * Ultra-subtle scrollbar for nested code blocks, modals, and tables
+ */
+.scrollbar-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(161, 161, 170, 0.18) transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.18);
+  border-radius: 9999px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.38);
+}

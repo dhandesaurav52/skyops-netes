@@ -85,7 +85,7 @@ export const CodeBlock: React.FC<{ code: string; language?: string; title?: stri
           <CopyButton text={code} />
         </div>
       )}
-      <pre className="p-4 text-xs font-mono text-zinc-200 overflow-x-auto leading-relaxed">
+      <pre className="p-4 text-xs font-mono text-zinc-200 overflow-x-auto leading-relaxed scrollbar-subtle">
         <code>{code}</code>
       </pre>
     </div>
@@ -123,7 +123,7 @@ export const Modal: React.FC<{
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-6 overflow-y-auto flex-1">{children}</div>
+        <div className="p-6 overflow-y-auto flex-1 scrollbar-subtle">{children}</div>
       </div>
     </div>
   );
