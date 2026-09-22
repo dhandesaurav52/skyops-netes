@@ -3,6 +3,8 @@ package transport
 import (
 	"testing"
 	"time"
+
+	"github.com/skyops-io/skyops/agent/internal/types"
 )
 
 func TestCircuitBreakerTrippingAndCooldown(t *testing.T) {

@@ -474,6 +474,7 @@ func (i *IngressInspector) CheckTLSCert(ctx context.Context, hostPort string) (*
 // ToTelemetryObservations converts ingress reports into standardized agent ResourceObservations
 func (i *IngressInspector) ToTelemetryObservations(reports []IngressInspectionReport, clusterID string) []types.ResourceObservation {
 	now := time.Now().UnixMilli()
+	nowStr := time.Now().UTC().Format(time.RFC3339)
 	observations := make([]types.ResourceObservation, 0, len(reports))
 
 	for _, rep := range reports {
@@ -507,7 +508,7 @@ func (i *IngressInspector) ToTelemetryObservations(reports []IngressInspectionRe
 				conditions = append(conditions, types.ConditionStatus{
 					Type:               string(probe.ErrorType),
 					Status:             "True",
-					LastTransitionTime: now,
+					LastTransitionTime: nowStr,
 					Reason:             string(probe.ErrorType),
 					Message:            fmt.Sprintf("[%s] %s", probe.URL, probe.ErrorMessage),
 				})
@@ -523,7 +524,7 @@ func (i *IngressInspector) ToTelemetryObservations(reports []IngressInspectionRe
 				conditions = append(conditions, types.ConditionStatus{
 					Type:               condType,
 					Status:             "True",
-					LastTransitionTime: now,
+					LastTransitionTime: nowStr,
 					Reason:             cert.Status,
 					Message:            fmt.Sprintf("Certificate for %s expires on %s (%d days left)", cert.Subject, cert.NotAfter.Format("2006-01-02"), cert.DaysUntilExpiration),
 				})

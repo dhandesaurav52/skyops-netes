@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/skyops-io/skyops/agent/inspectors"
 	"github.com/skyops-io/skyops/agent/internal/collector"
 	"github.com/skyops-io/skyops/agent/internal/config"
 	"github.com/skyops-io/skyops/agent/internal/heartbeat"
@@ -171,6 +172,15 @@ func main() {
 	// Initialize Real Kubernetes Container Log Collector
 	logCollector := collector.NewLogCollector(cfg, transportClient, kClient, metrics.Default)
 
+	// Initialize Cloud-Native Inspectors (PVC, Ingress, Custom Metrics)
+	var pvcInspector *inspectors.PVCInspector
+	var ingressInspector *inspectors.IngressInspector
+	if clientGoK8s != nil {
+		pvcInspector = inspectors.NewPVCInspector(clientGoK8s, nil, 85.0)
+		ingressInspector = inspectors.NewIngressInspector(clientGoK8s, 10*time.Second, 30)
+	}
+	customMetricCollector := inspectors.NewCustomMetricCollector(10 * time.Second)
+
 	// Mark metrics server as ready
 	if metricsServer != nil {
 		metricsServer.SetReady(true)
@@ -181,6 +191,58 @@ func main() {
 	go resourceCollector.Start(ctx)
 	go remediationManager.Start(ctx)
 	go logCollector.Start(ctx)
+
+	// Periodic Cloud-Native Inspection Routine
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+
+		runInspectors := func() {
+			inspCtx, inspCancel := context.WithTimeout(ctx, 45*time.Second)
+			defer inspCancel()
+
+			if pvcInspector != nil {
+				if pvcReports, err := pvcInspector.InspectAll(inspCtx); err == nil && len(pvcReports) > 0 {
+					obs := pvcInspector.ToTelemetryObservations(pvcReports, cfg.ClusterID)
+					for _, o := range obs {
+						telemetryQueue.Push(queue.Item{Type: "observation", Payload: o})
+					}
+				}
+			}
+
+			if ingressInspector != nil {
+				if ingReports, err := ingressInspector.InspectAll(inspCtx); err == nil && len(ingReports) > 0 {
+					obs := ingressInspector.ToTelemetryObservations(ingReports, cfg.ClusterID)
+					for _, o := range obs {
+						telemetryQueue.Push(queue.Item{Type: "observation", Payload: o})
+					}
+				}
+			}
+
+			if customMetricEvents := customMetricCollector.CollectAll(inspCtx); len(customMetricEvents) > 0 {
+				obs := customMetricCollector.ToTelemetryObservations(customMetricEvents, cfg.ClusterID)
+				for _, o := range obs {
+					telemetryQueue.Push(queue.Item{Type: "observation", Payload: o})
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			runInspectors()
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				runInspectors()
+			}
+		}
+	}()
 
 	slog.Info("SkyOps Agent running in active enterprise observation and remediation mode")
 

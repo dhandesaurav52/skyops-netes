@@ -601,6 +601,7 @@ func parseNumericValue(s string) (float64, error) {
 // ToTelemetryObservations transforms custom metric events into standardized agent ResourceObservations
 func (c *CustomMetricCollector) ToTelemetryObservations(events []CustomMetricTelemetryEvent, clusterID string) []types.ResourceObservation {
 	now := time.Now().UnixMilli()
+	nowStr := time.Now().UTC().Format(time.RFC3339)
 	observations := make([]types.ResourceObservation, 0, len(events))
 
 	for _, ev := range events {
@@ -636,7 +637,7 @@ func (c *CustomMetricCollector) ToTelemetryObservations(events []CustomMetricTel
 			conditions = append(conditions, types.ConditionStatus{
 				Type:               "MetricCollectionFailed",
 				Status:             "True",
-				LastTransitionTime: now,
+				LastTransitionTime: nowStr,
 				Reason:             "ProbeError",
 				Message:            ev.Error,
 			})
