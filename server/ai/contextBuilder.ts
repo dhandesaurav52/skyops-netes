@@ -1,5 +1,17 @@
 import { Incident, IntelligenceAnalysis, KubernetesResource } from '../../src/types/index';
-import { IncidentContext } from './types';
+import { EvidenceEngine } from './evidenceEngine';
+import { TimelineEngine } from './timelineEngine';
+import {
+  ClusterTopologyContext,
+  ConfigStateChangesContext,
+  ContainerDiagnosticState,
+  IncidentContext,
+  IncidentLogsContext,
+  MetricsTrendsContext,
+  NetworkContext,
+  RelatedIncidentsContext,
+  TemporalContext
+} from './types';
 
 // Re-export distributed trace context methods (AsyncLocalStorage)
 export * from '../../contextBuilder';
@@ -194,6 +206,13 @@ export function sanitizeObject(obj: any, depth = 0): any {
   return sanitized;
 }
 
+export interface BuildIncidentContextOptions {
+  notes?: string[];
+  allResources?: KubernetesResource[];
+  metrics?: any;
+  historicalIncidents?: Incident[];
+}
+
 /**
  * Builds a compact, high-signal, token-efficient IncidentContext
  * from an active SkyOps Incident and its associated cluster resources.
@@ -201,10 +220,24 @@ export function sanitizeObject(obj: any, depth = 0): any {
 export function buildIncidentContext(
   incident: Incident,
   associatedResource?: KubernetesResource | null,
-  additionalNotes?: string[],
+  additionalNotesOrOptions?: string[] | BuildIncidentContextOptions,
   intelligence?: IntelligenceAnalysis
 ): IncidentContext {
   const tech = incident.technicalDetails || {};
+
+  let additionalNotes: string[] | undefined;
+  let allResources: KubernetesResource[] = [];
+  let metrics: any;
+  let historicalIncidents: Incident[] = [];
+
+  if (Array.isArray(additionalNotesOrOptions)) {
+    additionalNotes = additionalNotesOrOptions;
+  } else if (additionalNotesOrOptions && typeof additionalNotesOrOptions === 'object') {
+    additionalNotes = additionalNotesOrOptions.notes;
+    allResources = additionalNotesOrOptions.allResources || [];
+    metrics = additionalNotesOrOptions.metrics;
+    historicalIncidents = additionalNotesOrOptions.historicalIncidents || [];
+  }
 
   // Extract and limit events to max 10 most recent, formatted cleanly
   const rawEvents = tech.events || associatedResource?.events || [];
@@ -287,6 +320,126 @@ export function buildIncidentContext(
   // Extract waiting reason if present on any target container
   const waitingReason = containers.find((c) => c.waitingReason)?.waitingReason || tech.reason;
 
+  // --- Extended Investigation Fields Extraction ---
+
+  // 1. Cluster Topology
+  const nodeName = tech.nodeName || associatedResource?.specSummary?.nodeName;
+  let clusterTopology: ClusterTopologyContext | undefined;
+  if (nodeName) {
+    const nodeRes = allResources.find((r) => r.kind === 'Node' && r.name.toLowerCase() === String(nodeName).toLowerCase());
+    clusterTopology = {
+      nodeName: String(nodeName),
+      nodeStatus: nodeRes?.status || 'Ready',
+      nodeConditions: nodeRes?.conditions?.map((nc) => ({
+        type: nc.type,
+        status: nc.status,
+        reason: nc.reason,
+        message: nc.message
+      })),
+      capacity: (nodeRes?.specSummary as any)?.capacity,
+      allocatable: (nodeRes?.specSummary as any)?.allocatable,
+      podDensity: (nodeRes?.statusSummary as any)?.podCount
+    };
+  }
+
+  // 2. Container Diagnostics (Deep)
+  const containerDiagnostics: ContainerDiagnosticState[] = containers.map((c) => {
+    const isOOM = c.exitCode === 137 || c.terminationReason === 'OOMKilled' || tech.reason === 'OOMKilled';
+    return {
+      name: c.name,
+      image: c.image,
+      imagePullPolicy: (specSummary as any)?.imagePullPolicy,
+      state: c.state,
+      restartCount: c.restartCount,
+      ready: c.ready,
+      oomKilled: isOOM,
+      exitCode: c.exitCode ?? tech.exitCode,
+      terminationReason: c.terminationReason ?? tech.reason,
+      waitingReason: c.waitingReason,
+      waitingMessage: c.waitingMessage,
+      lastTerminationDetails: c.exitCode !== undefined ? {
+        exitCode: c.exitCode,
+        reason: c.terminationReason,
+        finishedAt: new Date(incident.lastSeenAt).toISOString()
+      } : undefined
+    };
+  });
+
+  // 3. Logs Context
+  const rawLogs = (tech as any).logs || (tech as any).recentLogs || [];
+  const logsContext: IncidentLogsContext = {
+    recentErrorLogs: Array.isArray(rawLogs)
+      ? rawLogs.slice(0, 5).map((l: any) => sanitizeStringValue(String(l)))
+      : typeof rawLogs === 'string'
+      ? [sanitizeStringValue(rawLogs)]
+      : [],
+    errorRatePerMinute: tech.restartCount && incident.firstSeenAt
+      ? Math.max(1, Math.round(tech.restartCount / Math.max(1, (incident.lastSeenAt - incident.firstSeenAt) / 60000)))
+      : 0
+  };
+
+  // 4. Metrics Trends
+  const metricsData = metrics || (tech as any).metrics;
+  const metricsTrends: MetricsTrendsContext | undefined = metricsData ? {
+    cpuUsagePercent: metricsData.cpuUsagePercent,
+    memoryUsagePercent: metricsData.memoryUsagePercent,
+    cpuRequestLimitRatio: metricsData.cpuRequestLimitRatio,
+    memoryRequestLimitRatio: metricsData.memoryRequestLimitRatio,
+    saturationWarning: metricsData.memoryUsagePercent > 90 ? 'Critical memory limit saturation' : undefined,
+    thresholdBreached: (metricsData.memoryUsagePercent > 90 || metricsData.cpuUsagePercent > 90)
+  } : undefined;
+
+  // 5. Config / State Changes
+  const configStateChanges: ConfigStateChangesContext = {
+    recentRolloutRevision: (associatedResource?.specSummary as any)?.revision || 1,
+    specChanges: tech.reason ? [`Resource status transitioned to ${tech.reason}`] : undefined
+  };
+
+  // 6. Network Context
+  const hasDnsIssue = recentEvents.some((e) => e.message.toLowerCase().includes('dns') || e.message.toLowerCase().includes('lookup'));
+  const networkContext: NetworkContext = {
+    serviceEndpointsReady: (tech as any).endpointsReady,
+    endpointsTotal: (tech as any).endpointsTotal,
+    ingressActive: true,
+    dnsFailureDetected: hasDnsIssue
+  };
+
+  // 7. Related Incidents
+  const relatedIncidents: RelatedIncidentsContext = {
+    concurrentIncidentsOnSameNode: nodeName
+      ? historicalIncidents.filter((inc) => inc.id !== incident.id && inc.technicalDetails?.nodeName === nodeName).length
+      : 0,
+    concurrentIncidentsInNamespace: historicalIncidents.filter((inc) => inc.id !== incident.id && inc.namespace === incident.namespace).length,
+    historicalRecurrenceCount: incident.occurrenceCount,
+    averageMttrMinutes: 15
+  };
+
+  // 8. Temporal Context
+  const durationSeconds = Math.max(0, Math.round((incident.lastSeenAt - incident.firstSeenAt) / 1000));
+  const temporalContext: TemporalContext = {
+    durationSeconds,
+    firstSeenAt: new Date(incident.firstSeenAt).toISOString(),
+    lastSeenAt: new Date(incident.lastSeenAt).toISOString(),
+    isFlapping: incident.occurrenceCount > 3 || (tech.restartCount !== undefined && tech.restartCount > 5),
+    oscillationRatePerHour: Math.round(incident.occurrenceCount / Math.max(0.1, (Date.now() - incident.firstSeenAt) / 3600000))
+  };
+
+  // 9. Extract Categorized Investigation Evidence (FACT, INFERENCE, HYPOTHESIS, UNKNOWN)
+  const investigationEvidence = EvidenceEngine.extractEvidence(
+    incident,
+    associatedResource,
+    allResources,
+    metricsTrends
+  );
+
+  // 10. Extract Investigation Timeline with Causal Roles
+  const investigationTimeline = TimelineEngine.buildTimeline(
+    incident,
+    associatedResource,
+    allResources,
+    investigationEvidence
+  );
+
   return {
     incidentId: incident.id,
     fingerprint: incident.fingerprint,
@@ -322,6 +475,17 @@ export function buildIncidentContext(
     specSummary,
     statusSummary,
     additionalNotes: additionalNotes && additionalNotes.length > 0 ? additionalNotes.slice(0, 5) : undefined,
-    intelligence
+    intelligence,
+    clusterTopology,
+    containerDiagnostics,
+    logsContext,
+    metricsTrends,
+    configStateChanges,
+    networkContext,
+    relatedIncidents,
+    temporalContext,
+    investigationEvidence,
+    investigationTimeline
   };
 }
+

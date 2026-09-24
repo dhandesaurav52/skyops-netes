@@ -98,7 +98,11 @@ export class SkyOpsAIService {
       const context = buildIncidentContext(
         incident,
         associatedResource,
-        options?.notes,
+        {
+          notes: options?.notes,
+          allResources: options?.allResources,
+          metrics: options?.metrics
+        },
         deterministicIntelligence
       );
       const contextConstructedAt = Date.now();
@@ -125,6 +129,12 @@ export class SkyOpsAIService {
           analysis.confidenceExplanation = deterministicIntelligence.confidenceExplanation;
         }
         analysis.intelligence = deterministicIntelligence;
+        if (!analysis.investigationEvidence && context.investigationEvidence) {
+          analysis.investigationEvidence = context.investigationEvidence;
+        }
+        if (!analysis.investigationTimeline && context.investigationTimeline) {
+          analysis.investigationTimeline = context.investigationTimeline;
+        }
       } catch (err: any) {
         console.error(`[SkyOps AI] Unexpected error during AI analysis for ${incident.id}:`, err?.message || err);
         const fallbackAnalysis: Partial<SkyOpsAIAnalysis> = {
@@ -134,6 +144,18 @@ export class SkyOpsAIService {
           confidence: deterministicIntelligence.confidence,
           confidenceExplanation: deterministicIntelligence.confidenceExplanation,
           intelligence: deterministicIntelligence,
+          investigationEvidence: context.investigationEvidence || [],
+          investigationTimeline: context.investigationTimeline || [],
+          rootCauseProbabilities: [
+            {
+              cause: deterministicIntelligence.rootCause,
+              probabilityPercent: Math.round(deterministicIntelligence.confidence * 100),
+              explanation: deterministicIntelligence.confidenceExplanation,
+              isPrimary: true,
+              citedEvidenceIds: context.investigationEvidence ? context.investigationEvidence.slice(0, 3).map((e) => e.id) : []
+            }
+          ],
+          blastRadius: incident.resourceKind === 'Pod' ? 'SINGLE_POD' : 'WORKLOAD_ROLLOUT',
           evidence: deterministicIntelligence.signals.map((s) => ({
             category: s.category === 'FACT' ? 'OBSERVED_FACT' : 'AI_INFERENCE',
             source: `${s.resourceKind} ${s.property}`,
@@ -164,6 +186,8 @@ export class SkyOpsAIService {
         };
         analysis = SafetyPolicyEngine.validateAndEnforce(fallbackAnalysis, incident.id, context);
         analysis.intelligence = deterministicIntelligence;
+        analysis.investigationEvidence = context.investigationEvidence || [];
+        analysis.investigationTimeline = context.investigationTimeline || [];
       }
 
       const responseReturnedAt = Date.now();

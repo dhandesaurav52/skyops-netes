@@ -1390,6 +1390,108 @@ export interface SkyOpsAIAnalysis {
   executionSafe: boolean; // Flag verifying deterministic safety policy was applied
   timing?: AITimingMetrics; // Millisecond latency breakdown across all pipeline stages
   intelligence?: IntelligenceAnalysis; // Deterministic intelligence engine analysis
+  // --- Enhanced Investigation System Fields ---
+  investigation?: StructuredInvestigation;
+  investigationEvidence?: InvestigationEvidenceItem[];
+  investigationTimeline?: InvestigationTimelineEvent[];
+  rootCauseProbabilities?: RootCauseProbability[];
+  ruledOutCauses?: RuledOutCause[];
+  blastRadius?: BlastRadiusScope;
+  recommendedCommands?: Array<{
+    command: string;
+    description: string;
+    stage?: 'pre-check' | 'remediate' | 'verify' | 'rollback';
+  }>;
+}
+
+// ==========================================
+// SkyOps Structured Investigation Engine Types
+// ==========================================
+
+export type InvestigationEvidenceType = 'FACT' | 'INFERENCE' | 'HYPOTHESIS' | 'UNKNOWN';
+export type EvidenceSeverity = 'CRITICAL' | 'WARNING' | 'INFO';
+
+export interface InvestigationEvidenceItem {
+  id: string; // e.g. "EV-001"
+  type: InvestigationEvidenceType;
+  source: string; // e.g. "pod_status", "container_logs", "kubernetes_event", "metrics", "controller_spec", "node_condition"
+  timestamp: number;
+  description: string;
+  severity?: EvidenceSeverity;
+  rawValue?: any;
+  confidence: number; // 0 to 100
+  supportingHypotheses?: string[];
+  refutingHypotheses?: string[];
+}
+
+export type TimelineCausalRelation = 'TRIGGER' | 'SYMPTOM' | 'CONSEQUENCE' | 'RECOVERY_ATTEMPT' | 'UNKNOWN';
+
+export interface InvestigationTimelineEvent {
+  id: string;
+  timestamp: number;
+  title: string;
+  description: string;
+  category: SignalCategory;
+  source: string;
+  resourceKind: string;
+  resourceName: string;
+  namespace?: string;
+  temporalDistance?: string; // e.g. "-2m 14s before onset"
+  causalRelation: TimelineCausalRelation;
+  correlationScore: number; // 0 to 100
+}
+
+export interface RootCauseProbability {
+  cause: string;
+  probabilityPercent: number; // 0 to 100
+  explanation: string;
+  isPrimary: boolean;
+  citedEvidenceIds: string[];
+}
+
+export interface RuledOutCause {
+  cause: string;
+  reasonRuledOut: string;
+  contradictingEvidenceIds: string[];
+}
+
+export type BlastRadiusScope = 'ISOLATED_CONTAINER' | 'SINGLE_POD' | 'WORKLOAD_ROLLOUT' | 'NAMESPACE_WIDE' | 'CLUSTER_WIDE';
+
+export interface InvestigationActionPlan {
+  title: string;
+  description: string;
+  actionType: AIRemediationActionType;
+  targetResource: AIAffectedResource;
+  blastRadius: BlastRadiusScope;
+  blastRadiusExplanation: string;
+  prerequisites: string[];
+  riskAssessment: {
+    level: AIRiskLevel;
+    rationale: string;
+  };
+  verificationCriteria: AIVerificationCriteria;
+  rollbackPlan: string;
+  recommendedCommands?: Array<{
+    command: string;
+    description: string;
+    stage: 'pre-check' | 'remediate' | 'verify' | 'rollback';
+  }>;
+}
+
+export interface StructuredInvestigation {
+  investigationId: string;
+  incidentId: string;
+  executiveSummary: string;
+  primaryRootCause: string;
+  rootCauseProbabilities: RootCauseProbability[];
+  contributingFactors: string[];
+  ruledOutCauses: RuledOutCause[];
+  evidenceMatrix: InvestigationEvidenceItem[];
+  chronologicalTimeline: InvestigationTimelineEvent[];
+  actionPlan: InvestigationActionPlan;
+  unknownsAndGaps: string[];
+  investigationConfidence: number; // 0 to 1.0
+  investigatedAt: number;
 }
 
 // ==========================================

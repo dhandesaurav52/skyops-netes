@@ -3,8 +3,10 @@ import test from 'node:test';
 import { Incident, KubernetesResource, SkyOpsAIAnalysis } from '../../src/types/index';
 import { DataStore } from '../store';
 import { buildIncidentContext, sanitizeObject, sanitizeStringValue } from './contextBuilder';
+import { EvidenceEngine } from './evidenceEngine';
 import { HIGH_RISK_KEYWORDS, MEDIUM_RISK_KEYWORDS, SafetyPolicyEngine } from './safetyPolicy';
 import { SkyOpsAIService } from './service';
+import { TimelineEngine } from './timelineEngine';
 import { AIProvider, IncidentContext } from './types';
 
 const mockIncident: Incident = {
@@ -392,5 +394,156 @@ test('SkyOps AI Suite', async (t) => {
     // Org B CANNOT query Org A cluster resources
     const resourcesOrgB = store.getClusterResources(clusterA.id, orgB);
     assert.equal(resourcesOrgB.length, 0);
+  });
+
+  await t.test('EvidenceEngine: classifies FACT, INFERENCE, and UNKNOWN with confidence and severity', () => {
+    const evidence = EvidenceEngine.extractEvidence(mockIncident, mockResource, [], { memoryUsagePercent: 96 });
+
+    assert.ok(evidence.length >= 4, 'Should extract multiple evidence points');
+
+    // 1. Verify FACT for exit code 137
+    const exitCodeFact = evidence.find((e) => e.source === 'container_exit_code' && e.type === 'FACT');
+    assert.ok(exitCodeFact, 'Should have container_exit_code FACT');
+    assert.equal(exitCodeFact?.confidence, 100);
+    assert.equal(exitCodeFact?.severity, 'CRITICAL');
+    assert.ok(exitCodeFact?.description.includes('exit code 137'));
+
+    // 2. Verify INFERENCE for Linux kernel OOM-killer
+    const oomInference = evidence.find((e) => e.source === 'container_diagnostics' && e.type === 'INFERENCE');
+    assert.ok(oomInference, 'Should have container_diagnostics INFERENCE');
+    assert.ok(oomInference?.description.includes('OOM-killer'));
+    assert.ok(oomInference?.supportingHypotheses?.includes('HYP-OOM-KILL'));
+
+    // 3. Verify FACT for memory limit metrics
+    const metricsFact = evidence.find((e) => e.source === 'prometheus_metrics' && e.type === 'FACT');
+    assert.ok(metricsFact, 'Should have prometheus_metrics FACT');
+    assert.equal(metricsFact?.severity, 'CRITICAL');
+
+    // 4. Verify explicit UNKNOWN for missing logs
+    const unknownLogs = evidence.find((e) => e.type === 'UNKNOWN');
+    assert.ok(unknownLogs, 'Should explicitly register UNKNOWN for unattached logs');
+    assert.ok(unknownLogs?.description.includes('logs'));
+  });
+
+  await t.test('TimelineEngine: generates chronological timeline with relative temporal distance and causal tagging', () => {
+    const evidence = EvidenceEngine.extractEvidence(mockIncident, mockResource, []);
+    const timeline = TimelineEngine.buildTimeline(mockIncident, mockResource, [], evidence);
+
+    assert.ok(timeline.length >= 2, 'Should generate timeline events');
+
+    // Verify chronological order
+    for (let i = 1; i < timeline.length; i++) {
+      assert.ok(timeline[i].timestamp >= timeline[i - 1].timestamp, 'Timeline events must be sorted chronologically');
+    }
+
+    // Verify presence of causal relations
+    const hasTrigger = timeline.some((t) => t.causalRelation === 'TRIGGER');
+    const hasSymptomOrRecovery = timeline.some((t) => t.causalRelation === 'SYMPTOM' || t.causalRelation === 'RECOVERY_ATTEMPT');
+    assert.ok(hasTrigger, 'Timeline should tag trigger events');
+    assert.ok(hasSymptomOrRecovery, 'Timeline should tag symptoms or recovery attempts');
+
+    // Verify temporal distance formatting
+    const onsetEvent = timeline.find((t) => t.causalRelation === 'TRIGGER' && t.source === 'skyops-detector');
+    assert.ok(onsetEvent);
+    assert.equal(onsetEvent.temporalDistance, 'at incident onset');
+  });
+
+  await t.test('Structured AI Investigation: outputs complete investigation object, probabilities, blast radius, and preserves backward compatibility', async () => {
+    class StructuredMockProvider implements AIProvider {
+      public readonly name = 'StructuredMockAI';
+      public readonly model = 'mock-sre-v1';
+      public isAvailable() { return true; }
+      public async analyzeIncident(context: IncidentContext): Promise<SkyOpsAIAnalysis> {
+        return {
+          incidentId: context.incidentId,
+          summary: 'Pod crashed due to memory limit exhaustion',
+          rootCause: 'Container gateway exceeded memory cgroup limit of 512Mi (exit code 137)',
+          confidence: 0.94,
+          confidenceExplanation: 'Confirmed by exit code 137 and OOMKilled condition [EV-001]',
+          rootCauseProbabilities: [
+            {
+              cause: 'Container Memory Limit Exceeded',
+              probabilityPercent: 90,
+              explanation: 'Directly verified by exit code 137',
+              isPrimary: true,
+              citedEvidenceIds: ['EV-001', 'EV-002']
+            },
+            {
+              cause: 'Node Memory Saturation',
+              probabilityPercent: 10,
+              explanation: 'Possible contributing factor',
+              isPrimary: false,
+              citedEvidenceIds: ['EV-003']
+            }
+          ],
+          ruledOutCauses: [
+            {
+              cause: 'Image Pull Failure',
+              reasonRuledOut: 'Image was successfully pulled and container started',
+              contradictingEvidenceIds: ['EV-004']
+            }
+          ],
+          blastRadius: 'SINGLE_POD',
+          evidence: [
+            { category: 'OBSERVED_FACT', source: 'container_exit_code', detail: 'Exit code 137' }
+          ],
+          affectedResources: [
+            { kind: context.resourceKind, namespace: context.namespace, name: context.resourceName }
+          ],
+          recommendedFix: {
+            description: 'Increase memory limit to 1Gi',
+            reason: 'Provides buffer for Java heap spikes',
+            risk: 'LOW',
+            expectedImpact: 'Pod restarts with increased memory',
+            rollback: 'Revert memory limit to 512Mi'
+          },
+          saferAlternative: {
+            description: 'Enable horizontal pod autoscaling',
+            reason: 'Distributes load across multiple replicas'
+          },
+          requiresApproval: true,
+          additionalEvidenceNeeded: [],
+          status: 'SUCCESS',
+          executionSafe: true,
+          provider: this.name,
+          model: this.model,
+          analyzedAt: Date.now()
+        };
+      }
+    }
+
+    const service = new SkyOpsAIService(new StructuredMockProvider());
+    const analysis = await service.analyzeIncident(mockIncident, mockResource, { force: true });
+
+    // 1. Verify backward compatibility fields
+    assert.equal(analysis.incidentId, 'SKY-TEST-101');
+    assert.ok(analysis.summary.length > 0);
+    assert.ok(analysis.rootCause.length > 0);
+    assert.ok(analysis.confidence >= 0 && analysis.confidence <= 1.0);
+    assert.ok(Array.isArray(analysis.evidence));
+    assert.ok(analysis.recommendedFix);
+    assert.ok(analysis.saferAlternative);
+    assert.equal(analysis.requiresApproval, true);
+
+    // 2. Verify enriched investigation fields
+    assert.ok(analysis.investigationEvidence && analysis.investigationEvidence.length > 0);
+    assert.ok(analysis.investigationTimeline && analysis.investigationTimeline.length > 0);
+    assert.ok(analysis.rootCauseProbabilities && analysis.rootCauseProbabilities.length > 0);
+    assert.equal(analysis.blastRadius, 'SINGLE_POD');
+
+    // Verify primary root cause probability is present
+    const primaryProb = analysis.rootCauseProbabilities.find((p) => p.isPrimary);
+    assert.ok(primaryProb, 'Should contain a primary root cause probability');
+    assert.equal(primaryProb.probabilityPercent, 90);
+    assert.equal(primaryProb.cause, 'Container Memory Limit Exceeded');
+
+    // Verify ruled out causes
+    assert.ok(analysis.ruledOutCauses && analysis.ruledOutCauses.length > 0);
+    assert.equal(analysis.ruledOutCauses[0].cause, 'Image Pull Failure');
+
+    // Verify evidence items are attached
+    const exitCodeEv = analysis.investigationEvidence.find((e) => e.source === 'container_exit_code');
+    assert.ok(exitCodeEv);
+    assert.equal(exitCodeEv.type, 'FACT');
   });
 });
