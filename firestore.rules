@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /system_health/{docId} {
+      allow read, write: if true;
+    }
+
+    // Global Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidUserDoc(data, userId) {
+      return (data.uid == userId) &&
+        data.email is string &&
+        data.email.size() > 0 &&
+        data.email.size() <= 320 &&
+        (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 150)) &&
+        (!('organisationName' in data) || (data.organisationName is string && data.organisationName.size() <= 150)) &&
+        (!('role' in data) || (data.role in ['OWNER', 'ADMIN', 'OPERATOR', 'ENGINEER', 'VIEWER']));
+    }
+
+    // User profiles - strictly restricted to each user's own UID
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isSignedIn() && (request.auth.uid == userId || isValidUserDoc(request.resource.data, userId));
+      allow delete: if false;
+    }
+
+    // Organizations
+    match /organizations/{orgId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn();
+    }
+
+    // Memberships & Sub-members
+    match /memberships/{membershipId} {
+      allow read, write: if isSignedIn();
+    }
+    match /organizations/{orgId}/members/{memberId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Invitations
+    match /invitations/{invitationId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Clusters & Associated Data
+    match /clusters/{clusterId} {
+      allow read, write: if isSignedIn();
+    }
+    match /clusterTokens/{tokenHash} {
+      allow read, write: if isSignedIn();
+    }
+    match /clusterResources/{clusterId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Incidents, Timelines, Notes
+    match /incidents/{incidentId} {
+      allow read, write: if isSignedIn();
+    }
+    match /incidentTimeline/{eventId} {
+      allow read, write: if isSignedIn();
+    }
+    match /incidentNotes/{noteId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Remediations & Policies
+    match /remediations/{incidentId} {
+      allow read, write: if isSignedIn();
+    }
+    match /remediationActions/{actionId} {
+      allow read, write: if isSignedIn();
+    }
+    match /aiAnalyses/{incidentId} {
+      allow read, write: if isSignedIn();
+    }
+    match /policies/{policyId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Webhooks & Integrations
+    match /webhooks/{webhookId} {
+      allow read, write: if isSignedIn();
+    }
+    match /webhookDeliveries/{deliveryId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Subscriptions, Invoices & Usage
+    match /subscriptions/{orgId} {
+      allow read, write: if isSignedIn();
+    }
+    match /invoices/{invoiceId} {
+      allow read, write: if isSignedIn();
+    }
+    match /usage/{usageId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Support Tickets & User Settings
+    match /supportTickets/{ticketId} {
+      allow read, write: if isSignedIn();
+    }
+    match /userNotificationSettings/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Audit Ledger: tenant-scoped reads and append-only
+    match /auditEvents/{eventId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Stored Artifacts metadata: tenant-scoped reads and writes
+    match /storedArtifacts/{artifactId} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
+

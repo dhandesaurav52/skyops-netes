@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "skyops-agent.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "skyops-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "skyops-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "skyops-agent.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "skyops-agent.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: SKYOPS_CLUSTER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skyops-agent.fullname" . }}-credentials
+                  key: SKYOPS_CLUSTER_ID
+            - name: SKYOPS_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skyops-agent.fullname" . }}-credentials
+                  key: SKYOPS_AGENT_TOKEN
+            - name: SKYOPS_SERVER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skyops-agent.fullname" . }}-credentials
+                  key: SKYOPS_SERVER_URL
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- if .Values.persistence.enabled }}
+          volumeMounts:
+            - name: telemetry-spool
+              mountPath: {{ .Values.persistence.mountPath }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.persistence.enabled }}
+      volumes:
+        - name: telemetry-spool
+          persistentVolumeClaim:
+            claimName: {{ include "skyops-agent.fullname" . }}-spool
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

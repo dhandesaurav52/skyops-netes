@@ -1,0 +1,6 @@
+{
+  "name": "SkyOps",
+  "description": "Production-oriented Kubernetes observability and incident-management platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

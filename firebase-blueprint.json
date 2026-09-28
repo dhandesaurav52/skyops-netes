@@ -1,0 +1,373 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated user profile in SkyOps",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "ADMIN", "OPERATOR", "ENGINEER", "VIEWER"] },
+        "organizationId": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "email", "name"]
+    },
+    "Organization": {
+      "title": "Organization",
+      "description": "Customer workspace organization in SkyOps",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "membersCount": { "type": "number" }
+      },
+      "required": ["id", "name", "slug"]
+    },
+    "Membership": {
+      "title": "Membership",
+      "description": "Tenant-isolated user membership within an organization",
+      "type": "object",
+      "properties": {
+        "orgId": { "type": "string" },
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" },
+        "joinedAt": { "type": "number" }
+      },
+      "required": ["orgId", "userId", "email", "role"]
+    },
+    "Invitation": {
+      "title": "Invitation",
+      "description": "Invitation to join an organization",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "token": { "type": "string" },
+        "status": { "type": "string" },
+        "invitedBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["id", "orgId", "email", "role", "token"]
+    },
+    "Cluster": {
+      "title": "Cluster",
+      "description": "Kubernetes cluster registered in SkyOps",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string" },
+        "connectionState": { "type": "string" },
+        "agentStatus": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "lastHeartbeat": { "type": "number" }
+      },
+      "required": ["id", "orgId", "name"]
+    },
+    "ClusterToken": {
+      "title": "ClusterToken",
+      "description": "Hashed agent authentication token",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tokenHash": { "type": "string" },
+        "clusterId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "revokedAt": { "type": "number" }
+      },
+      "required": ["id", "tokenHash", "clusterId", "orgId"]
+    },
+    "ClusterResources": {
+      "title": "ClusterResources",
+      "description": "Normalized Kubernetes cluster resource inventory snapshot",
+      "type": "object",
+      "properties": {
+        "clusterId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "resources": { "type": "array" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["clusterId", "orgId", "resources"]
+    },
+    "Incident": {
+      "title": "Incident",
+      "description": "Operational incident detected in a Kubernetes cluster",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "clusterId": { "type": "string" },
+        "title": { "type": "string" },
+        "severity": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "orgId", "clusterId", "title", "severity", "status"]
+    },
+    "IncidentTimeline": {
+      "title": "IncidentTimeline",
+      "description": "Chronological timeline events for an incident",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "incidentId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "type": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "incidentId", "orgId", "type", "message", "timestamp"]
+    },
+    "IncidentNote": {
+      "title": "IncidentNote",
+      "description": "Collaborative investigator notes attached to an incident",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "incidentId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "incidentId", "orgId", "authorId", "content", "createdAt"]
+    },
+    "Remediation": {
+      "title": "Remediation",
+      "description": "Structured automated or manual remediation plan",
+      "type": "object",
+      "properties": {
+        "incidentId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "remediation": { "type": "object" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["incidentId", "orgId", "remediation"]
+    },
+    "RemediationAction": {
+      "title": "RemediationAction",
+      "description": "Action executed as part of incident remediation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "incidentId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "clusterId": { "type": "string" },
+        "status": { "type": "string" },
+        "executedAt": { "type": "number" }
+      },
+      "required": ["id", "incidentId", "orgId", "clusterId", "status"]
+    },
+    "AIAnalysis": {
+      "title": "AIAnalysis",
+      "description": "Gemini AI diagnostic analysis for an incident",
+      "type": "object",
+      "properties": {
+        "incidentId": { "type": "string" },
+        "orgId": { "type": "string" },
+        "analysis": { "type": "object" },
+        "analyzedAt": { "type": "number" }
+      },
+      "required": ["incidentId", "orgId", "analysis"]
+    },
+    "Policy": {
+      "title": "Policy",
+      "description": "Automated remediation and guardrail policy",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "name": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "orgId", "name", "enabled"]
+    },
+    "AuditEvent": {
+      "title": "AuditEvent",
+      "description": "Immutable security and audit trail log entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "actorId": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorType": { "type": "string" },
+        "action": { "type": "string" },
+        "resourceType": { "type": "string" },
+        "resourceId": { "type": "string" },
+        "result": { "type": "string" },
+        "hash": { "type": "string" },
+        "prevHash": { "type": "string" },
+        "details": { "type": "object" },
+        "correlationId": { "type": "string" },
+        "ipAddress": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "orgId", "actorId", "action", "resourceType", "resourceId", "result", "timestamp"]
+    },
+    "Webhook": {
+      "title": "Webhook",
+      "description": "Outbound webhook notification endpoint",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "name": { "type": "string" },
+        "url": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "events": { "type": "array" }
+      },
+      "required": ["id", "orgId", "name", "url", "enabled"]
+    },
+    "WebhookDelivery": {
+      "title": "WebhookDelivery",
+      "description": "Record of outbound webhook HTTP dispatch attempt",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "webhookId": { "type": "string" },
+        "statusCode": { "type": "number" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "orgId", "webhookId", "status", "timestamp"]
+    },
+    "Subscription": {
+      "title": "Subscription",
+      "description": "Organization SaaS billing subscription",
+      "type": "object",
+      "properties": {
+        "orgId": { "type": "string" },
+        "planId": { "type": "string" },
+        "status": { "type": "string" },
+        "currentPeriodEnd": { "type": "number" }
+      },
+      "required": ["orgId", "planId", "status"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Billed subscription invoice",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "orgId", "amount", "status"]
+    },
+    "Usage": {
+      "title": "Usage",
+      "description": "Monthly organization consumption and meter metrics",
+      "type": "object",
+      "properties": {
+        "orgId": { "type": "string" },
+        "period": { "type": "string" },
+        "totalClusters": { "type": "number" }
+      },
+      "required": ["orgId", "period"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer support ticket and thread",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "subject": { "type": "string" },
+        "status": { "type": "string" },
+        "priority": { "type": "string" }
+      },
+      "required": ["id", "orgId", "subject", "status"]
+    },
+    "UserNotificationSettings": {
+      "title": "UserNotificationSettings",
+      "description": "Per-user notification delivery preferences",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "emailNotifications": { "type": "boolean" },
+        "minSeverity": { "type": "string" }
+      },
+      "required": ["userId"]
+    },
+    "StoredArtifact": {
+      "title": "StoredArtifact",
+      "description": "Metadata and index reference for files and artifacts stored in Firebase Cloud Storage",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orgId": { "type": "string" },
+        "category": {
+          "type": "string",
+          "enum": [
+            "audit-exports",
+            "incident-artifacts",
+            "remediation-manifests",
+            "cluster-snapshots",
+            "ai-diagnostics",
+            "user-uploads"
+          ]
+        },
+        "storagePath": { "type": "string" },
+        "storageBucket": { "type": "string" },
+        "filename": { "type": "string" },
+        "sizeBytes": { "type": "number" },
+        "mimeType": { "type": "string" },
+        "checksumSha256": { "type": "string" },
+        "lifecycleStatus": {
+          "type": "string",
+          "enum": ["ACTIVE", "ARCHIVED", "EXPIRED", "DELETED"]
+        },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["id", "orgId", "category", "storagePath", "storageBucket", "filename", "sizeBytes", "mimeType", "checksumSha256", "lifecycleStatus", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": "User" },
+    "/organizations/{orgId}": { "schema": "Organization" },
+    "/memberships/{membershipId}": { "schema": "Membership" },
+    "/invitations/{invitationId}": { "schema": "Invitation" },
+    "/clusters/{clusterId}": { "schema": "Cluster" },
+    "/clusterTokens/{tokenHash}": { "schema": "ClusterToken" },
+    "/clusterResources/{clusterId}": { "schema": "ClusterResources" },
+    "/incidents/{incidentId}": { "schema": "Incident" },
+    "/incidentTimeline/{eventId}": { "schema": "IncidentTimeline" },
+    "/incidentNotes/{noteId}": { "schema": "IncidentNote" },
+    "/remediations/{incidentId}": { "schema": "Remediation" },
+    "/remediationActions/{actionId}": { "schema": "RemediationAction" },
+    "/aiAnalyses/{incidentId}": { "schema": "AIAnalysis" },
+    "/policies/{policyId}": { "schema": "Policy" },
+    "/auditEvents/{auditId}": { "schema": "AuditEvent" },
+    "/webhooks/{webhookId}": { "schema": "Webhook" },
+    "/webhookDeliveries/{deliveryId}": { "schema": "WebhookDelivery" },
+    "/subscriptions/{orgId}": { "schema": "Subscription" },
+    "/invoices/{invoiceId}": { "schema": "Invoice" },
+    "/usage/{usageId}": { "schema": "Usage" },
+    "/supportTickets/{ticketId}": { "schema": "SupportTicket" },
+    "/userNotificationSettings/{userId}": { "schema": "UserNotificationSettings" },
+    "/storedArtifacts/{artifactId}": { "schema": "StoredArtifact" }
+  }
+}
+

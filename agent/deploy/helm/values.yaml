@@ -1,0 +1,60 @@
+# Default values for skyops-agent
+replicaCount: 1
+
+image:
+  repository: ghcr.io/skyops-software-solutions/skyops-agent
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion (v1.5.1)
+  tag: "v1.5.1"
+
+# SkyOps Central Platform Registration Settings
+clusterId: ""
+agentToken: ""
+serverUrl: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+resources:
+  limits:
+    cpu: 250m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop:
+      - ALL
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: skyops-agent
+  annotations: {}
+
+# Durable local delivery buffer for unsent telemetry.
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  mountPath: /var/spool/skyops-agent

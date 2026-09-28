@@ -1,0 +1,9 @@
+apiVersion: v2
+name: skyops-agent
+description: Lightweight SkyOps Kubernetes Observability and Incident Agent
+type: application
+version: 1.5.1
+appVersion: "1.5.1"
+maintainers:
+  - name: SkyOps Platform Team
+    email: support@skyops.io

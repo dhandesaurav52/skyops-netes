@@ -1,0 +1,82 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Global Default Deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Security & Identity Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSafeFilename(name) {
+      return name is string && name.size() > 0 && name.size() <= 256 && !name.matches('.*(\\.\\./|/\\.\\.|\\\\|\\x00).*');
+    }
+
+    function isValidCategory(cat) {
+      return cat in [
+        'audit-exports',
+        'incident-artifacts',
+        'remediation-manifests',
+        'cluster-snapshots',
+        'ai-diagnostics',
+        'user-uploads'
+      ];
+    }
+
+    function isAllowedMimeType() {
+      return request.resource.contentType.matches('^(application/json|text/csv|text/plain|application/x-yaml|text/yaml|application/pdf|image/png|image/jpeg|application/gzip|application/octet-stream)(;.*)?$');
+    }
+
+    function isUnderCategorySizeLimit(cat) {
+      return (cat == 'audit-exports' && request.resource.size <= 50 * 1024 * 1024) ||
+             (cat == 'remediation-manifests' && request.resource.size <= 5 * 1024 * 1024) ||
+             (cat == 'ai-diagnostics' && request.resource.size <= 10 * 1024 * 1024) ||
+             (cat in ['incident-artifacts', 'cluster-snapshots', 'user-uploads'] && request.resource.size <= 25 * 1024 * 1024);
+    }
+
+    function hasValidMetadata(orgId, cat) {
+      return request.resource.metadata != null &&
+             request.resource.metadata.orgId == orgId &&
+             request.resource.metadata.category == cat;
+    }
+
+    // Strict Tenant Scoping: /tenants/{orgId}/{category}/{subpath=**}
+    match /tenants/{orgId}/{category}/{subpath=**} {
+      // Reads: Must be authenticated and have valid tenant structure
+      allow read: if isSignedIn() &&
+                     isValidId(orgId) &&
+                     isValidCategory(category);
+
+      // Writes: Strictly validated for type, size, safe path, and tenant metadata
+      allow create: if isSignedIn() &&
+                       isValidId(orgId) &&
+                       isValidCategory(category) &&
+                       isAllowedMimeType() &&
+                       isUnderCategorySizeLimit(category) &&
+                       hasValidMetadata(orgId, category);
+
+      // Updates: Re-validate content and prohibit mutating category or tenant
+      allow update: if isSignedIn() &&
+                       isValidId(orgId) &&
+                       isValidCategory(category) &&
+                       category != 'audit-exports' && // Audit exports are strictly immutable
+                       isAllowedMimeType() &&
+                       isUnderCategorySizeLimit(category) &&
+                       hasValidMetadata(orgId, category);
+
+      // Deletes: Allowed for mutable categories, but prohibited for audit-exports
+      allow delete: if isSignedIn() &&
+                       isValidId(orgId) &&
+                       isValidCategory(category) &&
+                       category != 'audit-exports'; // Audit exports cannot be deleted via client SDK
+    }
+  }
+}

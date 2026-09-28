@@ -1,0 +1,9 @@
+SkyOps Agent has been installed into cluster namespace: {{ .Release.Namespace }}
+
+1. Monitor the agent initialization logs:
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "skyops-agent.name" . }} -f
+
+2. If single-use pairing is required, copy the Connection Key from stdout and enter it into the SkyOps Dashboard.
+   (The Connection Key is valid for 15 minutes).
+
+3. For cluster status and telemetry, visit your SkyOps Web UI.

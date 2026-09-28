@@ -1,0 +1,179 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: skyops-system
+  labels:
+    app.kubernetes.io/name: skyops-agent
+    app.kubernetes.io/part-of: skyops
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: skyops-agent
+  namespace: skyops-system
+  labels:
+    app.kubernetes.io/name: skyops-agent
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: skyops-agent-reader
+  labels:
+    app.kubernetes.io/name: skyops-agent
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources:
+      - pods/log
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources:
+      - pods/status
+      - nodes
+      - nodes/status
+      - namespaces
+      - services
+      - endpoints
+      - persistentvolumeclaims
+      - persistentvolumes
+      - configmaps
+      - secrets
+      - serviceaccounts
+      - resourcequotas
+      - limitranges
+      - events
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - deployments/status
+      - statefulsets
+      - statefulsets/status
+      - daemonsets
+      - daemonsets/status
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources:
+      - endpointslices
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - rolebindings
+      - clusterrolebindings
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - nodes
+      - pods
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: skyops-agent-reader-binding
+  labels:
+    app.kubernetes.io/name: skyops-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: skyops-agent-reader
+subjects:
+  - kind: ServiceAccount
+    name: skyops-agent
+    namespace: skyops-system
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: skyops-agent-credentials
+  namespace: skyops-system
+  labels:
+    app.kubernetes.io/name: skyops-agent
+type: Opaque
+stringData:
+  SKYOPS_CLUSTER_ID: "YOUR_CLUSTER_ID_HERE"
+  SKYOPS_AGENT_TOKEN: "YOUR_AGENT_TOKEN_HERE"
+  SKYOPS_SERVER_URL: "https://skyops.acme.corp"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skyops-agent
+  namespace: skyops-system
+  labels:
+    app.kubernetes.io/name: skyops-agent
+    app.kubernetes.io/version: "v1.5.1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: skyops-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: skyops-agent
+    spec:
+      serviceAccountName: skyops-agent
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: skyops-agent
+          image: ghcr.io/skyops-software-solutions/skyops-agent:v1.5.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SKYOPS_CLUSTER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: skyops-agent-credentials
+                  key: SKYOPS_CLUSTER_ID
+            - name: SKYOPS_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: skyops-agent-credentials
+                  key: SKYOPS_AGENT_TOKEN
+            - name: SKYOPS_SERVER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: skyops-agent-credentials
+                  key: SKYOPS_SERVER_URL
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            limits:
+              cpu: 250m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL

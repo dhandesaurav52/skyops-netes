@@ -1,0 +1,31 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+data/*.json
+*.sqlite
+*.sqlite3
+telemetry/
+
+# Environment variables & local secrets
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env*
+!.env.example
+
+# Service account keys and certificates
+*.pem
+*.key
+*.p8
+*.p12
+*service-account*.json
+*credentials*.json
+*serviceAccountKey*.json
+firebase-applet-config.json
+secrets/
+*.secret

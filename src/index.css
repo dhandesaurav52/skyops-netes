@@ -1,0 +1,257 @@
+@import "tailwindcss";
+
+/* 
+ * =========================================================
+ * GLOBAL SLEEK & NON-INTRUSIVE SCROLLBAR ARCHITECTURE
+ * Eliminates thick, high-contrast native OS scrollbar tracks
+ * across all browsers, operating systems, and dark theme UI.
+ * =========================================================
+ */
+
+/* Standard CSS scrollbar properties (Firefox, Chrome 121+) */
+html,
+body,
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(161, 161, 170, 0.22) transparent;
+}
+
+*:hover {
+  scrollbar-color: rgba(161, 161, 170, 0.4) transparent;
+}
+
+/* WebKit, Blink, and Chromium scrollbar styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.22);
+  border-radius: 9999px;
+  transition: background-color 0.2s ease-in-out;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.45);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 
+ * Utility to completely hide scrollbars while maintaining native
+ * touch, trackpad, and mousewheel scrollability (e.g. navigation tabs, filter bars)
+ */
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.no-scrollbar,
+.scrollbar-none {
+  -ms-overflow-style: none !important; /* IE and Edge */
+  scrollbar-width: none !important; /* Firefox */
+}
+
+/* 
+ * Ultra-subtle scrollbar for nested code blocks, modals, and tables
+ */
+.scrollbar-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(161, 161, 170, 0.18) transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.18);
+  border-radius: 9999px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.38);
+}
+
+/* 
+ * =========================================================
+ * ELECTRIC INFRASTRUCTURE INTELLIGENCE - VISUAL UTILITIES
+ * Subtle electrical conduits, grid geometry, and energy glow
+ * Strictly BLACK + BLUE + WHITE design language
+ * =========================================================
+ */
+
+.electric-grid-bg {
+  background-image: 
+    linear-gradient(to right, rgba(56, 189, 248, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(56, 189, 248, 0.04) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+.electric-circuit-border {
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  box-shadow: 0 0 20px -2px rgba(14, 165, 233, 0.08), inset 0 0 15px -3px rgba(14, 165, 233, 0.03);
+}
+
+.electric-circuit-border-active {
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 25px -2px rgba(14, 165, 233, 0.22), inset 0 0 15px -2px rgba(14, 165, 233, 0.08);
+}
+
+.electric-glass-card {
+  background: rgba(6, 11, 22, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  box-shadow: 0 20px 40px -15px rgba(2, 6, 23, 0.9), 0 0 25px -5px rgba(14, 165, 233, 0.06);
+}
+
+.electric-focus-glow:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.4), 0 0 16px -2px rgba(14, 165, 233, 0.3);
+}
+
+@keyframes conduit-dash {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.conduit-flow-active {
+  stroke-dasharray: 6 4;
+  animation: conduit-dash 1.2s linear infinite;
+}
+
+@keyframes electric-pulse-glow {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.04);
+  }
+}
+
+.electric-pulse-glow {
+  animation: electric-pulse-glow 3s ease-in-out infinite;
+}
+
+/* 
+ * =========================================================
+ * STORM MISSION CONTROL - ENTERPRISE OPERATIONS SYSTEM
+ * Visual language: "Mission control for infrastructure during a storm"
+ * Deep storm dark canvas, atmospheric energy, electric cyan accents,
+ * subtle indigo/violet AI neural highlights, and tactile SRE telemetry.
+ * =========================================================
+ */
+
+.storm-bg-canvas {
+  background-color: #030712;
+  background-image: 
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(14, 165, 233, 0.08), transparent),
+    radial-gradient(circle 800px at 100% 100%, rgba(15, 23, 42, 0.5), transparent);
+}
+
+.storm-atmospheric-overlay {
+  background-image: radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.06) 0%, transparent 70%);
+}
+
+.storm-card {
+  background: linear-gradient(180deg, rgba(10, 18, 36, 0.75) 0%, rgba(5, 10, 20, 0.85) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.12);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 10px 25px -5px rgba(2, 6, 23, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.storm-card-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.storm-card-hover:hover {
+  border-color: rgba(56, 189, 248, 0.3);
+  box-shadow: 0 12px 30px -5px rgba(2, 6, 23, 0.8), 0 0 20px -4px rgba(14, 165, 233, 0.15);
+  transform: translateY(-1px);
+}
+
+.storm-kpi-card {
+  background: linear-gradient(180deg, rgba(8, 15, 30, 0.8) 0%, rgba(4, 8, 18, 0.9) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.storm-kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.3), transparent);
+}
+
+.storm-critical-card {
+  background: linear-gradient(180deg, rgba(40, 10, 20, 0.4) 0%, rgba(20, 5, 12, 0.6) 100%);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  box-shadow: 0 10px 30px -10px rgba(225, 29, 72, 0.2), inset 0 0 15px -3px rgba(225, 29, 72, 0.05);
+}
+
+.storm-ai-card {
+  background: linear-gradient(180deg, rgba(25, 15, 45, 0.45) 0%, rgba(12, 8, 25, 0.65) 100%);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  box-shadow: 0 10px 30px -10px rgba(147, 51, 234, 0.15), inset 0 0 20px -5px rgba(168, 85, 247, 0.05);
+}
+
+.storm-radar-line {
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.4) 0%, rgba(56, 189, 248, 0) 100%);
+}
+
+@keyframes storm-lightning-pulse {
+  0%, 100% {
+    opacity: 0.15;
+  }
+  48% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.8;
+  }
+  52% {
+    opacity: 0.3;
+  }
+  54% {
+    opacity: 0.9;
+  }
+  56% {
+    opacity: 0.15;
+  }
+}
+
+.storm-lightning-flash {
+  animation: storm-lightning-pulse 8s ease-in-out infinite;
+}
+
+.electric-active-tab {
+  background: linear-gradient(90deg, rgba(14, 165, 233, 0.15) 0%, rgba(14, 165, 233, 0.03) 100%);
+  border-left: 2px solid #38bdf8;
+  color: #7dd3fc;
+  box-shadow: inset 0 0 12px -2px rgba(14, 165, 233, 0.1);
+}
+
