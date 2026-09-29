@@ -1,6 +1,7 @@
 package spool
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -64,7 +65,7 @@ func TestSpoolWriteReadAck(t *testing.T) {
 	}
 }
 
-func TestSpoolQuotaPruning(t *testing.T) {
+func TestSpoolQuotaRefusesNewBatchWithoutDeletingDurableTelemetry(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "skyops-spool-test-*")
 	if err != nil {
 		t.Fatal(err)
@@ -81,21 +82,28 @@ func TestSpoolQuotaPruning(t *testing.T) {
 	b2 := &types.TelemetryBatch{ClusterID: "b2", Timestamp: 2000}
 	b3 := &types.TelemetryBatch{ClusterID: "b3", Timestamp: 3000}
 
-	_ = sp.WriteBatch(b1)
-	_ = sp.WriteBatch(b2)
-	_ = sp.WriteBatch(b3)
+	if err := sp.WriteBatch(b1); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.WriteBatch(b2); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.WriteBatch(b3); err != ErrSpoolFull && !errors.Is(err, ErrSpoolFull) {
+		t.Fatalf("expected ErrSpoolFull, got %v", err)
+	}
 
 	_, totalBytes := sp.Stats()
 	if totalBytes > 500 {
 		t.Errorf("spool exceeded quota: %d bytes > 500 bytes", totalBytes)
 	}
 
-	// Should read the latest available (oldest unpruned)
+	// The earliest durable batch remains available; capacity pressure never
+	// silently discards a batch that has not been acknowledged.
 	readBatch, _, err := sp.ReadOldestBatch()
 	if err != nil {
 		t.Fatalf("failed to read batch: %v", err)
 	}
-	if readBatch.ClusterID == "b1" {
-		t.Errorf("expected b1 to have been pruned, but read it")
+	if readBatch.ClusterID != "b1" {
+		t.Errorf("expected first durable batch b1, got %s", readBatch.ClusterID)
 	}
 }

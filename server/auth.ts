@@ -115,7 +115,6 @@ export async function verifyFirebaseIdToken(rawToken: string, projectId: string)
   const validProjects = new Set<string>([
     projectId,
     config.FIREBASE_PROJECT_ID,
-    'skyops-a1143',
     ...(config.FIREBASE_TRUSTED_PROJECT_IDS || '').split(',').map((value) => value.trim()).filter(Boolean)
   ].filter(Boolean) as string[]);
 

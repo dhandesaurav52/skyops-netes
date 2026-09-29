@@ -34,7 +34,7 @@ import {
   OrgUsageSummary
 } from '../repositories/types';
 import { ClusterResourcesRecord, ClusterTokenRecord, IPersistenceStore } from './types';
-import fallbackConfig from '../../firebase-applet-config.json';
+const fallbackConfig: Record<string, string | undefined> = {};
 
 class DocRefWrapper {
   constructor(private docRef: any, public id: string) {}

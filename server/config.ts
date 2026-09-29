@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
-import fallbackConfig from '../firebase-applet-config.json';
+const fallbackConfig: Record<string, string | undefined> = {};
 
 dotenv.config();
 
@@ -26,8 +26,10 @@ const ConfigSchema = z.object({
     .string()
     .optional()
     .transform((val) => {
-      if (process.env.NODE_ENV !== 'production') return true;
-      return val === 'true' || val === '1';
+      // Test-only authentication must be an explicit test-harness opt-in.  In
+      // particular, never turn it on merely because this is a development
+      // process; doing so makes a deployment environment mistake an auth bypass.
+      return process.env.NODE_ENV === 'test' && (val === 'true' || val === '1');
     }),
   AGENT_MIN_COMPATIBLE_VERSION: z.string().default('1.0.0'),
   AGENT_RECOMMENDED_VERSION: z.string().default('1.5.1'),

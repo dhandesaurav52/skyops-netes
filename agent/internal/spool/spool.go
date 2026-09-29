@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +21,9 @@ import (
 var (
 	ErrSpoolEmpty   = errors.New("spool is empty")
 	ErrSpoolCorrupt = errors.New("spool file corrupted or failed checksum")
+	// ErrSpoolFull intentionally preserves already accepted telemetry.  Dropping
+	// the oldest durable batch to make room silently loses historical data.
+	ErrSpoolFull = errors.New("spool capacity exhausted")
 )
 
 // Spool provides persistent disk-backed buffering for telemetry batches during backend outages
@@ -120,8 +122,12 @@ func (s *Spool) WriteBatch(batch *types.TelemetryBatch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Enforce disk quota before write
-	s.pruneOldestLocked(int64(len(payload)))
+	// Do not prune acknowledged-pending telemetry to make room.  The caller can
+	// retry after delivery recovers and operators receive an explicit error rather
+	// than a silent hole in the cluster's history.
+	if !s.hasCapacityLocked(int64(len(payload))) {
+		return fmt.Errorf("%w: %d byte batch exceeds remaining capacity", ErrSpoolFull, len(payload))
+	}
 
 	randBytes := make([]byte, 4)
 	_, _ = rand.Read(randBytes)
@@ -240,27 +246,18 @@ func (s *Spool) getSortedDatFilesLocked() ([]string, error) {
 	return datFiles, nil
 }
 
-func (s *Spool) pruneOldestLocked(neededBytes int64) {
+func (s *Spool) hasCapacityLocked(neededBytes int64) bool {
 	datFiles, err := s.getSortedDatFilesLocked()
 	if err != nil {
-		return
+		return false
 	}
 
 	var totalBytes int64
-	fileSizes := make(map[string]int64)
 	for _, f := range datFiles {
 		if fi, err := os.Stat(filepath.Join(s.dir, f)); err == nil {
 			totalBytes += fi.Size()
-			fileSizes[f] = fi.Size()
 		}
 	}
 
-	// If current size + needed exceeds maxBytes, delete oldest files
-	for len(datFiles) > 0 && (totalBytes+neededBytes > s.maxBytes) {
-		oldest := datFiles[0]
-		_ = os.Remove(filepath.Join(s.dir, oldest))
-		totalBytes -= fileSizes[oldest]
-		datFiles = datFiles[1:]
-		slog.Warn("Pruned oldest spooled telemetry batch due to disk limit", "file", oldest)
-	}
+	return totalBytes+neededBytes <= s.maxBytes
 }

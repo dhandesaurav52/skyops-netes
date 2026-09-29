@@ -22,16 +22,20 @@ import {
   getMetadata,
   FirebaseStorage
 } from 'firebase/storage';
-import fallbackConfig from '../firebase-applet-config.json';
+const fallbackConfig: Record<string, string | undefined> = {};
 
 const env = (typeof import.meta !== 'undefined' && (import.meta as any)?.env) || {};
+const isTestRuntime = env.MODE === 'test' || (typeof process !== 'undefined' && process.env.NODE_ENV === 'test');
 
 const rawBucket = env.VITE_FIREBASE_STORAGE_BUCKET || fallbackConfig.storageBucket || 'skyops-a1143.firebasestorage.app';
 const cleanStorageBucket = String(rawBucket).replace(/^gs:\/\//, '').trim();
 
 // Resolve Firebase configuration: environment variables take precedence, falling back to applet config
 export const resolvedFirebaseConfig = {
-  apiKey: env.VITE_FIREBASE_API_KEY || fallbackConfig.apiKey,
+  // Unit tests import UI services without a real Firebase project.  A clearly
+  // non-production placeholder lets the SDK initialize there; deployments must
+  // supply the real public Firebase web configuration through VITE_* values.
+  apiKey: env.VITE_FIREBASE_API_KEY || fallbackConfig.apiKey || (isTestRuntime ? 'test-api-key' : undefined),
   authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || fallbackConfig.authDomain,
   projectId: env.VITE_FIREBASE_PROJECT_ID || fallbackConfig.projectId,
   storageBucket: cleanStorageBucket,

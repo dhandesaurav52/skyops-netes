@@ -1,7 +1,7 @@
 import { FirestoreStore } from './FirestoreStore';
 import { InMemoryStore } from './InMemoryStore';
 import { IPersistenceStore } from './types';
-import fallbackConfig from '../../firebase-applet-config.json';
+const fallbackConfig: Record<string, string | undefined> = {};
 
 let storeInstance: IPersistenceStore | null = null;
 

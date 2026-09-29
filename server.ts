@@ -1181,6 +1181,33 @@ app.post('/api/v1/agent/telemetry', requireAgentAuth, async (req: AuthenticatedA
   const { items, resources, rawK8sList, rawK8s } = req.body;
   let extractedResources: KubernetesResource[] = [];
 
+  // Claim the batch *before* any mutation.  A previous implementation claimed
+  // after resource synchronization, so a replay could update state despite
+  // returning ALREADY_PROCESSED.  Agent batches carry their stable UUID in the
+  // body; the authenticated cluster and agent identity complete the key.
+  const batchId = typeof req.body?.batchId === 'string' ? req.body.batchId.trim() : '';
+  if (!batchId) {
+    return res.status(400).json({ error: 'Telemetry batchId is required for idempotent delivery' });
+  }
+  const agentId = String(req.headers['x-agent-id'] || 'unknown-agent');
+  const batchKey = `${req.clusterId}:${agentId}:${batchId}`;
+  const accepted = await getPersistenceStore().claimTelemetryBatch(batchKey, {
+    clusterId: req.clusterId,
+    agentId,
+    batchId,
+    receivedAt: Date.now(),
+    status: 'ACCEPTED'
+  });
+  if (!accepted) {
+    return res.json({
+      status: 'ALREADY_PROCESSED',
+      code: 'already_processed',
+      clusterId: req.clusterId,
+      batchId,
+      timestamp: Date.now()
+    });
+  }
+
   // Helper to map raw K8s resource object to SkyOps KubernetesResource
   const mapRawK8sItem = (item: any): KubernetesResource | null => {
     if (!item || !item.kind) return null;
@@ -1368,26 +1395,6 @@ app.post('/api/v1/agent/telemetry', requireAgentAuth, async (req: AuthenticatedA
     snapshotComplete: req.body?.snapshotComplete === true,
     telemetryTimestamp: Number(req.body?.observedAt || req.body?.timestamp || 0) || undefined
   });
-
-  const batchId = typeof req.body?.batchId === 'string' ? req.body.batchId.trim() : '';
-  if (batchId) {
-    const agentId = String(req.headers['x-agent-id'] || 'unknown-agent');
-    const batchKey = `${req.clusterId}:${agentId}:${batchId}`;
-    const accepted = await getPersistenceStore().claimTelemetryBatch(batchKey, {
-      clusterId: req.clusterId,
-      agentId,
-      batchId
-    });
-    if (!accepted) {
-      return res.json({
-        status: 'ALREADY_PROCESSED',
-        code: 'already_processed',
-        clusterId: req.clusterId,
-        batchId,
-        timestamp: Date.now()
-      });
-    }
-  }
 
   const cluster = store.getClusterByIdInternal(req.clusterId!);
   console.log(
@@ -2783,6 +2790,8 @@ async function startServer() {
     }
     console.warn('[SkyOps Server] Non-production persistence initialization failed:', err?.message || err);
   }
+
+  applicationLogArchive.start();
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
