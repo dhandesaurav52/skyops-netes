@@ -399,6 +399,7 @@ export const OperationActionModal: React.FC<OperationActionModalProps> = ({
         targetName: resource.name,
         targetNamespace: resource.namespace || undefined,
         targetUid: resource.uid,
+        idempotencyKey: `idem-${cluster.id}-${resource.kind}-${resource.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         confirmScaleToZero: targetReplicas === 0 ? confirmScaleToZero : undefined,
         confirmNakedPodDelete: isNakedPod ? confirmNakedPodDelete : undefined,
         confirmDrain: actionType === 'DrainNode' ? confirmDrain : undefined,

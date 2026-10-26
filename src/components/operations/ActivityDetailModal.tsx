@@ -40,6 +40,7 @@ export const ActivityDetailModal: React.FC<ActivityDetailModalProps> = ({
     operation.status === 'EXECUTED';
 
   const isFailed = operation.status === 'FAILED';
+  const isTimeout = operation.status === 'TIMEOUT' || operation.executionResult?.errorCategory === 'TIMEOUT';
   const isRolledBack = operation.status === 'ROLLED_BACK' || Boolean(operation.rollbackResult);
 
   const evidenceList =
@@ -57,17 +58,28 @@ export const ActivityDetailModal: React.FC<ActivityDetailModalProps> = ({
         {/* Header Summary */}
         <div className="p-3.5 rounded-xl bg-zinc-950/70 border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="space-y-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Zap className="w-4 h-4 text-sky-400" />
               <span className="font-bold text-sm text-zinc-100">{operation.actionType}</span>
+              {(operation.isSimulated || (operation as any).executionMode === 'SIMULATED') && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-amber-950/80 text-amber-300 border border-amber-800/80">
+                  Simulated Sandbox
+                </span>
+              )}
               <span
                 className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
                   isSuccess
                     ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
                     : isFailed
                     ? 'bg-rose-950 text-rose-400 border border-rose-800/60'
+                    : isTimeout
+                    ? 'bg-amber-950 text-amber-400 border border-amber-800/80 font-bold'
                     : isRolledBack
                     ? 'bg-amber-950 text-amber-400 border border-amber-800/60'
+                    : operation.status === 'VERIFYING'
+                    ? 'bg-purple-950 text-purple-300 border border-purple-800/60 animate-pulse'
+                    : operation.status === 'EXECUTING'
+                    ? 'bg-blue-950 text-blue-300 border border-blue-800/60 animate-pulse'
                     : 'bg-zinc-800 text-zinc-300'
                 }`}
               >
@@ -232,8 +244,72 @@ export const ActivityDetailModal: React.FC<ActivityDetailModalProps> = ({
           </p>
         </div>
 
+        {/* Rollback Details (if rollback was executed) */}
+        {operation.rollbackResult && (
+          <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-800/60 space-y-2">
+            <div className="flex items-center gap-2 text-amber-300 font-semibold">
+              <RotateCcw className="w-4 h-4 text-amber-400" />
+              <span>Automated Rollback Record</span>
+            </div>
+            <div className="space-y-1 text-xs font-mono text-zinc-300">
+              {operation.rollbackResult.restoredState && (
+                <div>Restored State: <span className="text-amber-300">{operation.rollbackResult.restoredState}</span></div>
+              )}
+              {operation.rollbackResult.rolledBackAt && (
+                <div>Rolled Back At: <span className="text-zinc-400">{new Date(operation.rollbackResult.rolledBackAt).toLocaleTimeString()}</span></div>
+              )}
+              {operation.rollbackResult.message && (
+                <div className="text-zinc-400">{operation.rollbackResult.message}</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Runtime Execution Traces (if present from agent) */}
+        {operation.executionResult?.runtimeTraces && operation.executionResult.runtimeTraces.length > 0 && (
+          <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800 space-y-2.5">
+            <div className="flex items-center gap-2 text-zinc-300 font-semibold text-[11px] uppercase tracking-wider">
+              <Clock className="w-3.5 h-3.5 text-sky-400" />
+              <span>Agent Runtime Execution Traces</span>
+            </div>
+            <div className="space-y-1.5 font-mono text-[11px]">
+              {operation.executionResult.runtimeTraces.map((t, idx) => (
+                <div key={idx} className="p-2 rounded bg-zinc-950/80 border border-zinc-800/80 flex items-start justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-zinc-800 text-sky-300 uppercase mr-2">
+                      {t.phase}
+                    </span>
+                    <span className="text-zinc-300">{t.message}</span>
+                    {t.error && <p className="text-rose-400 text-[10px] mt-0.5">Error: {t.error}</p>}
+                  </div>
+                  <span className="text-zinc-500 text-[10px] shrink-0">
+                    {new Date(t.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Unknown Mutation State / Timeout Alert */}
+        {isTimeout && (
+          <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-800/80 space-y-2">
+            <div className="flex items-center gap-2 text-amber-300 font-semibold">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              <span>Mutation State Unknown (Operation Timed Out)</span>
+            </div>
+            <p className="text-zinc-300 text-xs font-mono">
+              {operation.executionResult?.message ||
+                'The operation timed out while awaiting agent verification. The final Kubernetes state is UNKNOWN.'}
+            </p>
+            <p className="text-[11px] text-amber-400/90 leading-relaxed">
+              <strong>Operational Safety Rule:</strong> Do not automatically re-run or repeat this mutation. Verify live workloads on the cluster first to determine if changes partially or fully took effect.
+            </p>
+          </div>
+        )}
+
         {/* Failure / Rollback Details (if applicable) */}
-        {(isFailed || isRolledBack || operation.executionResult?.errorCategory) && (
+        {!isTimeout && (isFailed || isRolledBack || operation.executionResult?.errorCategory) && (
           <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-800/60 space-y-2">
             <div className="flex items-center gap-2 text-rose-300 font-semibold">
               <AlertTriangle className="w-4 h-4 text-rose-400" />

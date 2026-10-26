@@ -1849,6 +1849,7 @@ const ActionResultSchema = z.object({
       'VERIFYING',
       'SUCCEEDED',
       'FAILED',
+      'TIMEOUT',
       'ROLLING_BACK',
       'ROLLED_BACK',
       'CANCELLED',
@@ -2733,7 +2734,7 @@ app.post(
     const nodeActions = ['CordonNode', 'UncordonNode', 'DrainNode'];
     if (nodeActions.includes(parsed.data.actionType)) {
       const userRole = (req as any).userRole || (req as any).membership?.role;
-      if (userRole && !['OWNER', 'ADMIN', 'SRE'].includes(userRole)) {
+      if (!userRole || !['OWNER', 'ADMIN', 'SRE'].includes(userRole)) {
         return res.status(403).json({
           error: 'Forbidden: Platform infrastructure operations on worker nodes require Administrator or SRE privileges.'
         });

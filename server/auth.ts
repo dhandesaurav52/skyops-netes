@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import https from 'https';
+import crypto from 'crypto';
 import { store } from './store';
 import { Role, Organization } from '../src/types/index';
 import { config, isProduction } from './config';
@@ -11,6 +12,7 @@ export interface AuthenticatedUser {
   email: string;
   name: string;
   emailVerified?: boolean;
+  role?: Role;
 }
 
 export interface AuthenticatedUserRequest extends Request {
@@ -129,12 +131,14 @@ export async function verifyFirebaseIdToken(rawToken: string, projectId: string)
     const role = parts[2 + offset] || 'OWNER';
     const email = parts[3 + offset] ? decodeURIComponent(parts[3 + offset]) : 'dhandesaurav52@gmail.com';
     const name = parts[4 + offset] ? decodeURIComponent(parts[4 + offset]) : 'Alex Rivera (Staff SRE)';
-    const uid = `demo-${persona}-${Buffer.from(email).toString('hex').substring(0, 8)}`;
+    const emailHash = crypto.createHash('sha256').update(email.toLowerCase()).digest('hex').substring(0, 16);
+    const uid = `demo-${persona}-${emailHash}`;
     return {
       id: uid,
       email,
       name,
-      emailVerified: true
+      emailVerified: true,
+      role: role as Role
     };
   }
 

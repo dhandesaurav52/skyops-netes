@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Activity,
   AlertOctagon,
@@ -98,7 +98,10 @@ export const OperationsWorkspaceView: React.FC<OperationsWorkspaceViewProps> = (
   }, [initialClusterId, safeClusters]);
 
   const activeCluster = useMemo(() => {
-    return safeClusters.find((c) => c.id === selectedClusterId) || safeClusters[0] || null;
+    if (!selectedClusterId) {
+      return safeClusters.length > 0 ? safeClusters[0] : null;
+    }
+    return safeClusters.find((c) => c.id === selectedClusterId) || null;
   }, [safeClusters, selectedClusterId]);
 
   // Data states
@@ -124,19 +127,38 @@ export const OperationsWorkspaceView: React.FC<OperationsWorkspaceViewProps> = (
   const [diffDeployment, setDiffDeployment] = useState<KubernetesResource | null>(null);
   const [selectedActivityOp, setSelectedActivityOp] = useState<RemediationAction | null>(null);
 
+  // In-flight cluster request sequence tracking to prevent race conditions and cross-cluster overwrites
+  const activeClusterIdRef = useRef<string>(activeCluster?.id || '');
+  activeClusterIdRef.current = activeCluster?.id || '';
+
   // Load cluster data
   const fetchClusterOperationsData = async (isBackground = false) => {
-    if (!activeCluster) return;
-    try {
-      if (!isBackground) setLoading(true);
-      else setRefreshing(true);
+    const targetClusterId = activeCluster?.id;
+    if (!targetClusterId) return;
 
+    if (!isBackground) {
+      // Clear stale resource data immediately when loading a different cluster
+      setResources([]);
+      setIncidents([]);
+      setOperations([]);
+      setDeployments([]);
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
+    try {
       const [resData, incData, opsData, depsData] = await Promise.all([
-        api.getClusterResources(activeCluster.id).catch(() => [] as KubernetesResource[]),
-        api.getIncidents({ clusterId: activeCluster.id }).catch(() => [] as Incident[]),
-        api.getClusterOperations(activeCluster.id).catch(() => ({ operations: [] })),
-        api.getDeployments(activeCluster.id).catch(() => ({ deployments: [] }))
+        api.getClusterResources(targetClusterId).catch(() => [] as KubernetesResource[]),
+        api.getIncidents({ clusterId: targetClusterId }).catch(() => [] as Incident[]),
+        api.getClusterOperations(targetClusterId).catch(() => ({ operations: [] })),
+        api.getDeployments(targetClusterId).catch(() => ({ deployments: [] }))
       ]);
+
+      // Guard: prevent earlier in-flight response from overwriting newly selected cluster
+      if (activeClusterIdRef.current !== targetClusterId) {
+        return;
+      }
 
       setResources(Array.isArray(resData) ? resData : []);
       setIncidents(Array.isArray(incData) ? incData : []);
@@ -145,8 +167,10 @@ export const OperationsWorkspaceView: React.FC<OperationsWorkspaceViewProps> = (
     } catch (err) {
       console.warn('Operations workspace data fetch notice:', err);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (activeClusterIdRef.current === targetClusterId) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -154,18 +178,26 @@ export const OperationsWorkspaceView: React.FC<OperationsWorkspaceViewProps> = (
     fetchClusterOperationsData();
   }, [activeCluster?.id]);
 
-  // Connection state helper
-  const isConnected = useMemo(() => {
-    if (!activeCluster) return false;
+  // Real cluster agent connection state (never true for simulated clusters)
+  const isRealAgentConnected = useMemo(() => {
+    if (!activeCluster || activeCluster.isSimulated) return false;
+    const now = Date.now();
+    const hasFreshHeartbeat = activeCluster.lastHeartbeat ? now - activeCluster.lastHeartbeat < 5 * 60 * 1000 : false;
+    const hasFreshSeen = activeCluster.lastSeenAt ? now - activeCluster.lastSeenAt < 5 * 60 * 1000 : false;
     return (
-      activeCluster.agentStatus === 'CONNECTED' ||
-      activeCluster.connectionState === 'connected' ||
-      activeCluster.connectionStatus === 'connected' ||
-      (activeCluster.lastHeartbeat ? Date.now() - activeCluster.lastHeartbeat < 5 * 60 * 1000 : false) ||
-      (activeCluster.lastSeenAt ? Date.now() - activeCluster.lastSeenAt < 5 * 60 * 1000 : false) ||
-      Boolean(activeCluster.isSimulated)
+      (activeCluster.agentStatus === 'CONNECTED' ||
+        activeCluster.connectionState === 'connected' ||
+        activeCluster.connectionStatus === 'connected') &&
+      (hasFreshHeartbeat || hasFreshSeen)
     );
   }, [activeCluster]);
+
+  // Operational readiness helper
+  const isConnected = useMemo(() => {
+    if (!activeCluster) return false;
+    if (activeCluster.isSimulated) return true;
+    return isRealAgentConnected;
+  }, [activeCluster, isRealAgentConnected]);
 
   const telemetryAge = useMemo(() => {
     if (!activeCluster) return 'No data';
@@ -303,20 +335,27 @@ export const OperationsWorkspaceView: React.FC<OperationsWorkspaceViewProps> = (
             </div>
 
             {/* Connection Status Pill */}
-            <div
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
-                isConnected
-                  ? 'bg-emerald-950/60 border-emerald-800/70 text-emerald-300'
-                  : 'bg-rose-950/60 border-rose-800/70 text-rose-300'
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
+            {activeCluster.isSimulated ? (
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border bg-amber-950/60 border-amber-800/70 text-amber-300">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                <span>Simulated Cluster (Demo Mode)</span>
+              </div>
+            ) : (
+              <div
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
+                  isRealAgentConnected
+                    ? 'bg-emerald-950/60 border-emerald-800/70 text-emerald-300'
+                    : 'bg-rose-950/60 border-rose-800/70 text-rose-300'
                 }`}
-              />
-              <span>{isConnected ? 'Agent Connected' : 'Agent Offline'}</span>
-            </div>
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isRealAgentConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
+                  }`}
+                />
+                <span>{isRealAgentConnected ? 'Live Agent Connected' : 'Agent Disconnected'}</span>
+              </div>
+            )}
 
             {/* Telemetry Freshness */}
             <div className="flex items-center gap-1 text-xs text-zinc-400 bg-zinc-950/60 px-2.5 py-1 rounded-lg border border-zinc-800">
@@ -1233,6 +1272,11 @@ export const OperationsWorkspaceView: React.FC<OperationsWorkspaceViewProps> = (
                             <td className="py-3 px-4 font-semibold text-zinc-100 flex items-center gap-2">
                               <Zap className="w-3.5 h-3.5 text-sky-400 group-hover:text-sky-300 transition-colors" />
                               <span className="group-hover:underline underline-offset-2">{op.actionType}</span>
+                              {(op.isSimulated || (op as any).executionMode === 'SIMULATED') && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-semibold bg-amber-950/80 text-amber-300 border border-amber-800/60 uppercase">
+                                  Simulated
+                                </span>
+                              )}
                             </td>
                             <td className="py-3 px-4 font-mono text-zinc-300">
                               {op.target?.kind}/{op.target?.namespace ? `${op.target.namespace}/` : ''}{op.target?.name}
@@ -1247,7 +1291,17 @@ export const OperationsWorkspaceView: React.FC<OperationsWorkspaceViewProps> = (
                                     ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
                                     : op.status === 'FAILED'
                                     ? 'bg-rose-950 text-rose-400 border border-rose-800/60'
-                                    : 'bg-amber-950 text-amber-400 border border-amber-800/60'
+                                    : op.status === 'TIMEOUT'
+                                    ? 'bg-amber-950/80 text-amber-400 border border-amber-700/80'
+                                    : op.status === 'ROLLED_BACK'
+                                    ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
+                                    : op.status === 'ROLLING_BACK'
+                                    ? 'bg-orange-950 text-orange-300 border border-orange-800/60 animate-pulse'
+                                    : op.status === 'VERIFYING'
+                                    ? 'bg-purple-950 text-purple-300 border border-purple-800/60 animate-pulse'
+                                    : op.status === 'EXECUTING'
+                                    ? 'bg-blue-950 text-blue-300 border border-blue-800/60 animate-pulse'
+                                    : 'bg-zinc-800 text-zinc-300 border border-zinc-700'
                                 }`}
                               >
                                 {op.status}

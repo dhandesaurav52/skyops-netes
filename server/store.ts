@@ -566,6 +566,8 @@ export class DataStore {
             this.aiAnalyses.delete(id);
           }
         }
+        // Reconcile any in-flight actions that timed out while backend was offline
+        this.reconcileStalledActions();
         console.log(`[DataStore] Snapshot cache loaded: ${this.orgs.size} orgs, ${this.clusters.size} clusters, ${this.users.size} users.`);
       }
     } catch (err: any) {
@@ -763,10 +765,91 @@ export class DataStore {
       for (const cluster of this.clusters.values()) {
         this.reconcileClusterConnectionState(cluster, now);
       }
+      this.reconcileStalledActions(now);
     }, 15000);
     if (typeof timer.unref === 'function') {
       timer.unref();
     }
+  }
+
+  public reconcileStalledActions(now = Date.now()): number {
+    let reapedCount = 0;
+    const MAX_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max execution lease
+    const DISCONNECTED_TIMEOUT_MS = 3 * 60 * 1000;   // 3 minutes if agent is disconnected
+
+    for (const action of this.remediationActions.values()) {
+      if (
+        action.status === 'SUCCEEDED' ||
+        action.status === 'FAILED' ||
+        action.status === 'TIMEOUT' ||
+        action.status === 'ROLLED_BACK' ||
+        action.status === 'EXPIRED' ||
+        action.status === 'CANCELLED' ||
+        action.status === 'REJECTED'
+      ) {
+        continue;
+      }
+
+      const cluster = this.clusters.get(action.clusterId);
+      const isAgentDisconnected = cluster
+        ? cluster.connectionState === 'offline' || cluster.connectionStatus === 'disconnected' || cluster.agentStatus === 'OFFLINE'
+        : true;
+
+      // 1. Pending/Queued actions that exceeded explicit expiresAt
+      if (
+        (action.status === 'PENDING' || action.status === 'QUEUED') &&
+        action.expiresAt &&
+        now > action.expiresAt
+      ) {
+        action.status = 'EXPIRED';
+        action.completedAt = now;
+        this.addTimelineEvent(action.incidentId, {
+          type: 'REMEDIATION_EXPIRED',
+          actor: { type: 'SYSTEM', name: 'SkyOps Safety Engine' },
+          description: `Remediation action ${action.id} expired before delivery to agent.`,
+          metadata: { actionId: action.id }
+        });
+        reapedCount++;
+        continue;
+      }
+
+      // 2. Actions delivered or in-flight (EXECUTING, VERIFYING, ROLLING_BACK) that timed out
+      const startedAt = action.executingAt || action.deliveredAt || action.createdAt;
+      const elapsed = now - startedAt;
+
+      const isTimedOut =
+        elapsed > MAX_EXECUTION_TIMEOUT_MS ||
+        (isAgentDisconnected && elapsed > DISCONNECTED_TIMEOUT_MS);
+
+      if (
+        isTimedOut &&
+        (action.status === 'DELIVERED' ||
+          action.status === 'EXECUTING' ||
+          action.status === 'VERIFYING' ||
+          action.status === 'ROLLING_BACK')
+      ) {
+        const priorStatus = action.status;
+        action.status = 'TIMEOUT';
+        action.completedAt = now;
+        action.executionResult = {
+          success: false,
+          errorCategory: 'TIMEOUT',
+          message: `Operation timed out while in ${priorStatus} state (${Math.round(elapsed / 1000)}s elapsed). Final Kubernetes mutation state is UNKNOWN because the agent connection lapsed or execution stalled. Manual cluster verification required before retrying.`
+        };
+        this.addTimelineEvent(action.incidentId, {
+          type: 'REMEDIATION_TIMEOUT',
+          actor: { type: 'SYSTEM', name: 'SkyOps Safety Engine' },
+          description: `Operation ${action.id} timed out in ${priorStatus} state. Final mutation state is UNKNOWN.`,
+          metadata: { actionId: action.id, priorStatus, elapsedMs: elapsed }
+        });
+        reapedCount++;
+      }
+    }
+
+    if (reapedCount > 0) {
+      this.saveSnapshot();
+    }
+    return reapedCount;
   }
 
   // --- Auth & User / Organization Management ---
@@ -9111,7 +9194,13 @@ export class DataStore {
     if (!action || action.clusterId !== clusterId) return null;
 
     // Idempotent reporting: if already reported in terminal state, return existing action
-    if (action.status === 'SUCCEEDED' || action.status === 'FAILED' || action.status === 'VERIFIED_RESOLVED' || action.status === 'ROLLED_BACK') {
+    if (
+      action.status === 'SUCCEEDED' ||
+      action.status === 'FAILED' ||
+      action.status === 'VERIFIED_RESOLVED' ||
+      action.status === 'ROLLED_BACK' ||
+      action.status === 'TIMEOUT'
+    ) {
       return action;
     }
 
@@ -9213,8 +9302,46 @@ export class DataStore {
       };
     }
 
-    if (result.verification) {
+    if (result.verificationResult) {
+      action.verificationResult = result.verificationResult as any;
+      if (isSuccess) action.verifiedAt = (result.verificationResult as any).verifiedAt || now;
+    } else if (result.verification) {
       action.verification = result.verification as any;
+      if (isSuccess) {
+        action.verificationResult = {
+          success: true,
+          observedState: (result.verification as any).observedState || 'Healthy',
+          evidence: (result.verification as any).evidence || [result.message || `Operation ${action.actionType} verified`],
+          verifiedAt: now
+        };
+        action.verifiedAt = now;
+      }
+    } else if (isSuccess) {
+      action.verificationResult = {
+        success: true,
+        observedState: 'Healthy',
+        evidence: [result.message || `Operation ${action.actionType} verified in cluster`],
+        verifiedAt: now
+      };
+      action.verifiedAt = now;
+    }
+
+    if (result.rollbackResult) {
+      action.rollbackResult = result.rollbackResult as any;
+    }
+
+    if (result.runtimeTraces && action.executionResult) {
+      action.executionResult.runtimeTraces = result.runtimeTraces as any;
+    }
+
+    if (stateStr === 'TIMEOUT' || (typeof result.message === 'string' && result.message.includes('TimeoutException'))) {
+      action.status = 'TIMEOUT';
+      if (action.executionResult) {
+        action.executionResult.errorCategory = 'TIMEOUT';
+        if (!action.executionResult.message.includes('UNKNOWN')) {
+          action.executionResult.message += ' (Final cluster state is UNKNOWN)';
+        }
+      }
     }
 
     if (!isSuccess) {

@@ -382,7 +382,6 @@ export const AppShell: React.FC<AppShellProps> = ({
   ).length;
 
   const pageMeta = PAGE_METADATA[activeTab] || PAGE_METADATA.overview;
-  const isConsoleWorkspace = activeTab === 'observability' || activeTab === 'operations';
 
   return (
     <div className="flex h-full w-full bg-zinc-950 text-zinc-100 antialiased overflow-hidden font-sans">
@@ -398,13 +397,7 @@ export const AppShell: React.FC<AppShellProps> = ({
       />
 
       {/* Main Content Area */}
-      <main
-        className={`flex-1 flex flex-col min-w-0 h-full bg-zinc-950 overscroll-contain ${
-          isConsoleWorkspace
-            ? 'overflow-hidden'
-            : 'overflow-y-auto'
-        }`}
-      >
+      <main className="flex-1 flex flex-col min-w-0 h-full bg-zinc-950 overscroll-contain overflow-y-auto">
         {/* Clean, Human-Understandable Top Header Bar */}
         <header className="h-12 border-b border-zinc-800/80 px-4 sm:px-6 flex items-center justify-between shrink-0 bg-zinc-950/90 backdrop-blur-xs sticky top-0 z-20">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -476,13 +469,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         </header>
 
         {/* View Routing (7 Core Production Pages) */}
-        <div
-          className={`flex-1 flex flex-col ${
-            isConsoleWorkspace
-              ? 'min-h-0 h-full overflow-hidden'
-              : 'min-h-0'
-          }`}
-        >
+        <div className="flex-1 flex flex-col min-h-0">
           {!currentOrg ? (
             <div className="p-8 max-w-xl mx-auto my-12">
               <div className="p-6 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-5 shadow-xl">
